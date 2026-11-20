@@ -7,7 +7,7 @@ import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 export type MissionStatus =
   | 'created'
@@ -33,6 +33,8 @@ export interface Mission {
   goal: string;
   constraints: string | null;
   repo: string;
+  /** Max total estimated cost in abstract units (planner budget); null = no budget. */
+  budget: number | null;
   status: MissionStatus;
   source: BrainSource;
   createdAt: string;
@@ -44,6 +46,8 @@ export interface Task {
   missionId: string;
   key: string;
   title: string;
+  /** Instructions for the executor (kept so revise/reroute can reuse them). */
+  prompt: string;
   contract: string;
   /** Acceptance criteria; every task must have one (planner-intake enforces). */
   acceptance: string;
@@ -71,6 +75,8 @@ export interface Attempt {
   exitCode: number | null;
   stderr: string | null;
   diffSummary: string | null;
+  /** Verifier evidence (JSON) attached by P1 verification; null until verified. */
+  evidence: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -130,6 +136,7 @@ CREATE TABLE IF NOT EXISTS missions (
   goal TEXT NOT NULL,
   constraints TEXT,
   repo TEXT NOT NULL,
+  budget INTEGER,
   status TEXT NOT NULL,
   source TEXT NOT NULL,
   created_at TEXT NOT NULL,
@@ -140,6 +147,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   mission_id TEXT NOT NULL REFERENCES missions(id),
   key TEXT NOT NULL,
   title TEXT NOT NULL,
+  prompt TEXT NOT NULL DEFAULT '',
   contract TEXT NOT NULL,
   acceptance TEXT NOT NULL DEFAULT '',
   depends_on TEXT NOT NULL DEFAULT '[]',
@@ -161,6 +169,7 @@ CREATE TABLE IF NOT EXISTS attempts (
   exit_code INTEGER,
   stderr TEXT,
   diff_summary TEXT,
+  evidence TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -208,18 +217,12 @@ export class Store {
     this.migrate();
   }
 
-  /** Bring a v1 database up to the current schema (additive only). */
+  /** Bring an older database up to the current schema (additive only). */
   private migrate(): void {
     const row = this.db
       .prepare("SELECT value FROM meta WHERE key = 'schema_version'")
       .get() as { value: string } | undefined;
     const version = row ? Number(row.value) : 1;
-    if (version >= 2) return;
-    const taskCols = new Set(
-      (this.db.prepare('PRAGMA table_info(tasks)').all() as Array<{ name: string }>).map(
-        (c) => c.name,
-      ),
-    );
     const addCol = (table: string, col: string, def: string): void => {
       const cols = new Set(
         (this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map(
@@ -228,7 +231,7 @@ export class Store {
       );
       if (!cols.has(col)) this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${def}`);
     };
-    if (!taskCols.has('acceptance')) {
+    if (version < 2) {
       addCol('tasks', 'acceptance', "TEXT NOT NULL DEFAULT ''");
       addCol('tasks', 'depends_on', "TEXT NOT NULL DEFAULT '[]'");
       addCol('tasks', 'estimate', 'INTEGER');
@@ -236,11 +239,18 @@ export class Store {
       addCol('tasks', 'type', 'TEXT');
       addCol('tasks', 'revisions_used', 'INTEGER NOT NULL DEFAULT 0');
       addCol('tasks', 'rerouted', 'INTEGER NOT NULL DEFAULT 0');
+      addCol('worktrees', 'merged_commit', 'TEXT');
     }
-    addCol('worktrees', 'merged_commit', 'TEXT');
-    this.db
-      .prepare("UPDATE meta SET value = '2' WHERE key = 'schema_version'")
-      .run();
+    if (version < 3) {
+      addCol('missions', 'budget', 'INTEGER');
+      addCol('attempts', 'evidence', 'TEXT');
+      addCol('tasks', 'prompt', "TEXT NOT NULL DEFAULT ''");
+    }
+    if (version < SCHEMA_VERSION) {
+      this.db
+        .prepare("UPDATE meta SET value = ? WHERE key = 'schema_version'")
+        .run(String(SCHEMA_VERSION));
+    }
   }
 
   close(): void {
@@ -266,6 +276,7 @@ export class Store {
     goal: string;
     constraints?: string | null;
     repo: string;
+    budget?: number | null;
     source: BrainSource;
   }): Mission {
     const now = nowIso();
@@ -274,6 +285,7 @@ export class Store {
       goal: input.goal,
       constraints: input.constraints ?? null,
       repo: input.repo,
+      budget: input.budget ?? null,
       status: 'created',
       source: input.source,
       createdAt: now,
@@ -281,9 +293,9 @@ export class Store {
     };
     this.db
       .prepare(
-        'INSERT INTO missions (id, goal, constraints, repo, status, source, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO missions (id, goal, constraints, repo, budget, status, source, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
       )
-      .run(m.id, m.goal, m.constraints, m.repo, m.status, m.source, m.createdAt, m.updatedAt);
+      .run(m.id, m.goal, m.constraints, m.repo, m.budget, m.status, m.source, m.createdAt, m.updatedAt);
     return m;
   }
 
@@ -305,6 +317,7 @@ export class Store {
     missionId: string;
     key: string;
     title: string;
+    prompt?: string;
     contract: string;
     acceptance?: string;
     dependsOn?: string[];
@@ -318,6 +331,7 @@ export class Store {
       missionId: input.missionId,
       key: input.key,
       title: input.title,
+      prompt: input.prompt ?? '',
       contract: input.contract,
       acceptance: input.acceptance ?? '',
       dependsOn: input.dependsOn ?? [],
@@ -332,13 +346,14 @@ export class Store {
     };
     this.db
       .prepare(
-        'INSERT INTO tasks (id, mission_id, key, title, contract, acceptance, depends_on, estimate, mode, type, revisions_used, rerouted, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO tasks (id, mission_id, key, title, prompt, contract, acceptance, depends_on, estimate, mode, type, revisions_used, rerouted, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       )
       .run(
         t.id,
         t.missionId,
         t.key,
         t.title,
+        t.prompt,
         t.contract,
         t.acceptance,
         JSON.stringify(t.dependsOn),
@@ -430,12 +445,13 @@ export class Store {
       exitCode: null,
       stderr: null,
       diffSummary: null,
+      evidence: null,
       createdAt: now,
       updatedAt: now,
     };
     this.db
       .prepare(
-        'INSERT INTO attempts (id, task_id, agent, worktree_path, status, exit_code, stderr, diff_summary, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO attempts (id, task_id, agent, worktree_path, status, exit_code, stderr, diff_summary, evidence, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       )
       .run(
         a.id,
@@ -446,6 +462,7 @@ export class Store {
         a.exitCode,
         a.stderr,
         a.diffSummary,
+        a.evidence,
         a.createdAt,
         a.updatedAt,
       );
@@ -462,7 +479,7 @@ export class Store {
   updateAttempt(
     id: string,
     patch: Partial<
-      Pick<Attempt, 'worktreePath' | 'status' | 'exitCode' | 'stderr' | 'diffSummary'>
+      Pick<Attempt, 'worktreePath' | 'status' | 'exitCode' | 'stderr' | 'diffSummary' | 'evidence'>
     >,
   ): void {
     const cur = this.getAttempt(id);
@@ -470,7 +487,7 @@ export class Store {
     const next: Attempt = { ...cur, ...patch, updatedAt: nowIso() };
     this.db
       .prepare(
-        'UPDATE attempts SET worktree_path = ?, status = ?, exit_code = ?, stderr = ?, diff_summary = ?, updated_at = ? WHERE id = ?',
+        'UPDATE attempts SET worktree_path = ?, status = ?, exit_code = ?, stderr = ?, diff_summary = ?, evidence = ?, updated_at = ? WHERE id = ?',
       )
       .run(
         next.worktreePath,
@@ -478,6 +495,7 @@ export class Store {
         next.exitCode,
         next.stderr,
         next.diffSummary,
+        next.evidence,
         next.updatedAt,
         id,
       );
@@ -596,6 +614,7 @@ function rowToMission(r: Record<string, unknown>): Mission {
     goal: String(r.goal),
     constraints: r.constraints === null ? null : String(r.constraints),
     repo: String(r.repo),
+    budget: r.budget === null || r.budget === undefined ? null : Number(r.budget),
     status: String(r.status) as MissionStatus,
     source: String(r.source) as BrainSource,
     createdAt: String(r.created_at),
@@ -616,6 +635,7 @@ function rowToTask(r: Record<string, unknown>): Task {
     missionId: String(r.mission_id),
     key: String(r.key),
     title: String(r.title),
+    prompt: String(r.prompt ?? ''),
     contract: String(r.contract),
     acceptance: String(r.acceptance ?? ''),
     dependsOn,
@@ -640,6 +660,7 @@ function rowToAttempt(r: Record<string, unknown>): Attempt {
     exitCode: r.exit_code === null ? null : Number(r.exit_code),
     stderr: r.stderr === null ? null : String(r.stderr),
     diffSummary: r.diff_summary === null ? null : String(r.diff_summary),
+    evidence: r.evidence === null || r.evidence === undefined ? null : String(r.evidence),
     createdAt: String(r.created_at),
     updatedAt: String(r.updated_at),
   };

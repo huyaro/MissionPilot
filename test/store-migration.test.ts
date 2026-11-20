@@ -43,8 +43,10 @@ describe('store migration v1 -> v2', () => {
       assert.equal(task.title, 'Old task');
       assert.deepEqual(task.dependsOn, []);
       assert.equal(task.acceptance, '');
+      assert.equal(task.prompt, '');
       assert.equal(task.revisionsUsed, 0);
       assert.equal(task.rerouted, false);
+      assert.equal(store.getMission('m_old')?.budget, null);
       // New writes work on the migrated schema.
       const t2 = store.createTask({
         missionId: 'm_old',
