@@ -87,10 +87,21 @@ export class HttpMcpServer {
   private checkAuth(req: IncomingMessage): boolean {
     const header = req.headers.authorization ?? '';
     const prefix = 'Bearer ';
-    if (!header.startsWith(prefix)) return false;
-    const given = Buffer.from(header.slice(prefix.length));
-    const expected = Buffer.from(this.token);
-    return given.length === expected.length && timingSafeEqual(given, expected);
+    if (header.startsWith(prefix)) {
+      const given = Buffer.from(header.slice(prefix.length));
+      const expected = Buffer.from(this.token);
+      if (given.length === expected.length && timingSafeEqual(given, expected)) return true;
+    }
+    // SSE (EventSource) cannot send an Authorization header, so /api/events
+    // also accepts the token as a query parameter. Localhost only; the
+    // server never logs request URLs.
+    const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
+    if (url.pathname === '/api/events' && req.method === 'GET') {
+      const given = Buffer.from(url.searchParams.get('token') ?? '');
+      const expected = Buffer.from(this.token);
+      return given.length === expected.length && timingSafeEqual(given, expected);
+    }
+    return false;
   }
 
   private async readBody(req: IncomingMessage): Promise<unknown> {

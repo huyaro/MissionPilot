@@ -97,6 +97,21 @@ describe('scheduler', () => {
       assert.match(log, /Task A/);
       assert.match(log, /Task B/);
       assert.ok(log.indexOf('Task B') < log.indexOf('Task A')); // newest first
+      // DAG invariant: B's worktree was based on A's merge commit (the
+      // integration head), not on main — B builds on A's merged result.
+      const aWt = store.getWorktreeByAttempt(aAttempts[0].id);
+      const bWt = store.getWorktreeByAttempt(bAttempts[0].id);
+      assert.ok(aWt && bWt);
+      const integrationHead = await git(repo, ['rev-parse', 'orchestrator/integration']);
+      const aMergeCommit = await git(repo, [
+        'log',
+        '--format=%H',
+        '--grep=Task A',
+        'orchestrator/integration',
+      ]);
+      assert.equal(bWt.baseCommit, aMergeCommit.trim().split('\n')[0]);
+      assert.notEqual(bWt.baseCommit, aWt.baseCommit);
+      assert.ok(integrationHead.length > 0);
       // Main untouched.
       await assert.rejects(git(repo, ['show', 'main:hello.ts']));
     } finally {

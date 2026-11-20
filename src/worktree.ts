@@ -33,6 +33,29 @@ export async function resolveHeadCommit(repoPath: string): Promise<string> {
 }
 
 /**
+ * Resolve the base commit a new worktree should start from.
+ * DAG semantics (MILESTONES §9): a later task builds on the integration
+ * branch head — the accumulated result of all previously merged tasks —
+ * not on main's HEAD. Falls back to the repo HEAD when the integration
+ * branch does not exist yet (first task of the first mission).
+ */
+export async function resolveDispatchBase(repoPath: string): Promise<string> {
+  try {
+    const { stdout } = await git(repoPath, [
+      'rev-parse',
+      '--verify',
+      '--quiet',
+      `refs/heads/${INTEGRATION_BRANCH}`,
+    ]);
+    const sha = stdout.trim();
+    if (sha) return sha;
+  } catch {
+    // No integration branch yet — fall through to HEAD.
+  }
+  return resolveHeadCommit(repoPath);
+}
+
+/**
  * Create a detached worktree at `baseCommit` (default HEAD) under `worktreePath`.
  * The caller must register it in the store before the attempt starts.
  */

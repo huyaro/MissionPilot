@@ -85,6 +85,29 @@ describe('planner-intake', () => {
     }
   });
 
+  it('rejects unknown task fields instead of silently dropping them', () => {
+    const { store, missionId } = freshMission();
+    try {
+      // dependsOn (camelCase) instead of depends_on: dropping it silently
+      // would break the DAG, so the plan must be refused with a clear error.
+      assert.throws(
+        () =>
+          submitPlan(store, {
+            mission_id: missionId,
+            tasks: [
+              taskA,
+              { ...taskB, dependsOn: ['a'] } as unknown as typeof taskB,
+            ],
+          }),
+        /unknown field 'dependsOn'/,
+      );
+      // And the mission is still 'created' (rejection is atomic).
+      assert.equal(store.getMission(missionId)?.status, 'created');
+    } finally {
+      store.close();
+    }
+  });
+
   it('rejects a plan whose estimates exceed the budget', () => {
     const { store, missionId } = freshMission(10);
     try {

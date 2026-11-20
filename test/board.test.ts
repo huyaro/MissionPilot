@@ -154,6 +154,15 @@ describe('board API', () => {
     await reader.cancel();
   });
 
+  it('SSE accepts the token as a query param (EventSource cannot send headers)', async () => {
+    const res = await fetch(`${base}/api/events?token=${TOKEN}`);
+    assert.equal(res.status, 200);
+    await res.body?.cancel();
+    const bad = await fetch(`${base}/api/events?token=wrong`);
+    assert.equal(bad.status, 401);
+    await bad.body?.cancel();
+  });
+
   it('returns 404 for unknown api routes', async () => {
     const r = await api('/api/nope');
     assert.equal(r.status, 404);

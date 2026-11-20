@@ -79,7 +79,6 @@ export class Scheduler {
 
   private async tickMission(mission: Mission): Promise<void> {
     const tasks = this.store.listTasksByMission(mission.id);
-    const byKey = new Map(tasks.map((t) => [t.key, t]));
 
     // 1. Timeouts: abort running attempts older than the limit.
     for (const task of tasks) {
@@ -100,16 +99,24 @@ export class Scheduler {
       await this.verifyAndDecide(mission, task, attempt);
     }
 
-    // 3. Dispatch ready tasks (deps done), up to the concurrency limit.
-    const running = this.store
-      .listTasksByMission(mission.id)
-      .filter((t) => t.status === 'running').length;
+    // 3. Merge verified-done tasks in DAG order — BEFORE dispatching, so a
+    // dependent task's worktree is based on the freshly merged integration
+    // head (DAG semantics: B builds on A's merged result). A merge failure
+    // marks the task failed, so its dependents are never dispatched.
+    await this.mergeDoneTasks(mission);
+
+    // 4. Dispatch ready tasks (deps done), up to the concurrency limit.
+    // Re-read task states: verify/merge above changed them, and the
+    // snapshot from the top of the tick is stale.
+    const freshTasks = this.store.listTasksByMission(mission.id);
+    const freshByKey = new Map(freshTasks.map((t) => [t.key, t]));
+    const running = freshTasks.filter((t) => t.status === 'running').length;
     let slots = this.concurrencyPerMission - running;
     if (slots > 0) {
-      for (const task of this.store.listTasksByMission(mission.id)) {
+      for (const task of freshTasks) {
         if (slots <= 0) break;
         if (task.status !== 'pending') continue;
-        if (!this.depsDone(task, byKey)) continue;
+        if (!this.depsDone(task, freshByKey)) continue;
         this.store.updateTaskStatus(task.id, 'ready');
         this.store.updateTaskStatus(task.id, 'leased');
         await this.dispatcher.dispatchExistingTask(
@@ -122,9 +129,6 @@ export class Scheduler {
         slots--;
       }
     }
-
-    // 4. Merge verified-done tasks in DAG order.
-    await this.mergeDoneTasks(mission);
 
     // 5. Close out the mission.
     const finalTasks = this.store.listTasksByMission(mission.id);

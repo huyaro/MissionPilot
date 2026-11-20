@@ -9,7 +9,7 @@
 import { join } from 'node:path';
 import { Store } from './store.js';
 import type { Attempt, Task } from './store.js';
-import { createWorktree, diffSummary, resolveHeadCommit } from './worktree.js';
+import { createWorktree, diffSummary, resolveDispatchBase } from './worktree.js';
 import type { ExecutorAdapter } from './adapters/types.js';
 import { appendLedger } from './ledger.js';
 import { publishBoardEvent } from './bus.js';
@@ -59,7 +59,8 @@ export class Dispatcher {
   async dispatch(input: DispatchInput): Promise<DispatchResult> {
     const adapter = this.resolveAdapter(input.agent);
     // Throws if workdir is missing or not a git repo — before any record is made.
-    const head = await resolveHeadCommit(input.workdir);
+    // Base = integration head when it exists (DAG semantics), else repo HEAD.
+    const head = await resolveDispatchBase(input.workdir);
 
     const { mission, task, attempt } = this.store.runInTransaction(() => {
       const mission = this.store.createMission({
@@ -103,7 +104,7 @@ export class Dispatcher {
     contract: string,
   ): Promise<DispatchResult> {
     const adapter = this.resolveAdapter(agent);
-    const head = await resolveHeadCommit(workdir);
+    const head = await resolveDispatchBase(workdir);
     const mission = this.store.getMission(task.missionId);
     if (!mission) throw new Error(`mission not found: ${task.missionId}`);
     const attempt = this.store.createAttempt({ taskId: task.id, agent });

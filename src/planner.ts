@@ -70,7 +70,28 @@ export function submitPlan(
   }
 
   const keys = new Set<string>();
+  // Unknown task fields are rejected, not silently dropped: a misspelled
+  // field (e.g. dependsOn instead of depends_on) would silently break the
+  // DAG, and a silent drop is the worst failure mode for a plan.
+  const knownFields = new Set([
+    'key',
+    'title',
+    'prompt',
+    'contract',
+    'acceptance',
+    'depends_on',
+    'estimate',
+    'mode',
+    'type',
+  ]);
   for (const t of input.tasks) {
+    for (const field of Object.keys(t)) {
+      if (!knownFields.has(field)) {
+        throw new Error(
+          `submit_plan: task ${t.key} has unknown field '${field}' (known: ${[...knownFields].join(', ')})`,
+        );
+      }
+    }
     if (typeof t.key !== 'string' || t.key.trim() === '') {
       throw new Error('submit_plan: every task needs a non-empty key');
     }
