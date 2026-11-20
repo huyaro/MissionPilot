@@ -6,12 +6,19 @@
 // Modes (env FAKE_MODE, or --fail / --empty flags):
 //   success (default): message + tool_call + file_edit events, writes hello.ts, exit 0
 //   fail:              message event, stderr text, exit 1
+//   fail-once:        first spawn fails, later spawns succeed (marker in
+//                      tmpdir, keyed by FAKE_ONCE_KEY; deterministic revise
+//                      test without mid-flight env flips)
 //   empty:             message event only, writes nothing, exit 0 (INV-3 case)
 //   slow:              like success, but sleeps ~2s first
-//   review-pass:       message event carrying {"verdict":"pass",...}, exit 0
-//   review-fail:       message event carrying {"verdict":"fail",...}, exit 0
-//   review-modify:     writes a file, then a pass verdict (verifier must reject it)
-import { writeFileSync } from 'node:fs';
+//   review-fail:       reviewer runs emit {"verdict":"fail",...} instead of pass
+//   review-modify:     reviewer runs write a file, then emit a pass verdict
+//                      (the verifier must reject a reviewer that writes)
+// Reviewer runs are detected by the prompt ("code reviewer"); maker runs
+// never emit verdicts.
+import { writeFileSync, existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const args = process.argv.slice(2);
 const promptIdx = args.indexOf('-p');
@@ -32,7 +39,10 @@ if (mode === 'slow') {
 
 emit({ type: 'message', content: `fake executor received prompt: ${prompt.slice(0, 80)}` });
 
-if (mode === 'review-pass' || mode === 'review-fail' || mode === 'review-modify') {
+// Reviewer runs are recognised by the review prompt (the verifier asks for
+// a JSON verdict). A reviewer never writes task files; review-modify mode
+// deliberately writes one so the verifier can reject it.
+if (prompt.includes('code reviewer')) {
   if (mode === 'review-modify') {
     writeFileSync('reviewer-touched.txt', 'the reviewer wrote this\n');
   }
@@ -42,6 +52,16 @@ if (mode === 'review-pass' || mode === 'review-fail' || mode === 'review-modify'
   process.exit(0);
 }
 
+if (mode === 'fail-once') {
+  const marker = join(tmpdir(), `orch-fake-failed-once-${process.env.FAKE_ONCE_KEY ?? 'default'}`);
+  if (!existsSync(marker)) {
+    writeFileSync(marker, 'x');
+    process.stderr.write('simulated failure: fail-once first run\n');
+    process.exit(1);
+  }
+  mode = 'success';
+}
+
 if (mode === 'fail') {
   process.stderr.write('simulated failure: fake executor refused the task\n');
   process.exit(1);
@@ -49,7 +69,10 @@ if (mode === 'fail') {
 
 if (mode === 'success' || mode === 'slow') {
   emit({ type: 'tool_call', tool: 'write', args: { path: 'hello.ts' } });
-  writeFileSync('hello.ts', 'export const hello = () => "hi";\n');
+  // Content carries the prompt, so two tasks with different prompts produce
+  // different diffs even when the second worktree is based on the first
+  // task's merged result (DAG order: B builds on A's integration head).
+  writeFileSync('hello.ts', `export const hello = () => "hi";\n// task: ${prompt.slice(0, 60)}\n`);
   emit({ type: 'file_edit', path: 'hello.ts', action: 'create' });
   emit({ type: 'cost', usage: { inputTokens: 10, outputTokens: 20 } });
 }

@@ -306,6 +306,14 @@ export class Store {
     return row ? rowToMission(row) : null;
   }
 
+  /** Missions with work in flight (planned or executing). */
+  listActiveMissions(): Mission[] {
+    const rows = this.db
+      .prepare("SELECT * FROM missions WHERE status IN ('planned', 'executing') ORDER BY created_at ASC")
+      .all() as Record<string, unknown>[];
+    return rows.map(rowToMission);
+  }
+
   updateMissionStatus(id: string, status: MissionStatus): void {
     this.db
       .prepare('UPDATE missions SET status = ?, updated_at = ? WHERE id = ?')

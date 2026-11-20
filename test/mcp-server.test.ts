@@ -113,7 +113,7 @@ describe('MCP server over stdio', () => {
       const tools = (list.result as unknown as { tools: Array<{ name: string }> }).tools;
       assert.deepEqual(
         tools.map((t) => t.name).sort(),
-        ['dispatch_task', 'get_attempt'],
+        ['create_mission', 'dispatch_task', 'get_attempt', 'get_mission', 'submit_plan'],
       );
 
       const dispatch = await callTool(client, 'dispatch_task', {
@@ -146,6 +146,71 @@ describe('MCP server over stdio', () => {
       assert.equal(final.status, 'done');
       assert.ok(final.diff_summary.files.includes('hello.ts'));
       // INV-2: main repo untouched.
+      assert.equal(await git(repo, ['status', '--porcelain']), '');
+    } finally {
+      proc.kill('SIGTERM');
+    }
+  });
+
+  it('P1 flow over MCP: create_mission -> submit_plan -> get_mission to done', async () => {
+    chmodSync(fakeBin, 0o755);
+    const dataDir = mkdtempSync(join(tmpdir(), 'orch-mcp-'));
+    const repo = await makeTempGitRepo();
+    const proc = spawn(process.execPath, [serverJs], {
+      env: {
+        ...process.env,
+        ORCHESTRATOR_DATA_DIR: dataDir,
+        ORCHESTRATOR_CODEBUDDY_BIN: fakeBin,
+        ORCHESTRATOR_QODER_BIN: fakeBin,
+        ORCHESTRATOR_TICK_MS: '500',
+        FAKE_MODE: 'success',
+      },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    const client = new McpClient(proc);
+    try {
+      await client.request('initialize', {
+        protocolVersion: '2024-11-05',
+        capabilities: {},
+        clientInfo: { name: 'mcp-test', version: '0.1.0' },
+      });
+      client.notify('notifications/initialized', {});
+      const created = await callTool(client, 'create_mission', { goal: 'two tasks', repo });
+      assert.equal(created.isError, false, created.text);
+      const { mission_id } = JSON.parse(created.text) as { mission_id: string };
+      const planned = await callTool(client, 'submit_plan', {
+        mission_id,
+        tasks: [
+          {
+            key: 'a',
+            title: 'Task A',
+            prompt: 'create hello.ts',
+            contract: 'hello.ts exists',
+            acceptance: 'hello.ts exports hello',
+          },
+          {
+            key: 'b',
+            title: 'Task B',
+            prompt: 'extend hello.ts',
+            contract: 'hello.ts still exists',
+            acceptance: 'hello.ts exports hello',
+            depends_on: ['a'],
+          },
+        ],
+      });
+      assert.equal(planned.isError, false, planned.text);
+      // Poll get_mission until the scheduler finishes the DAG.
+      let finalStatus = '';
+      const deadline = Date.now() + 30_000;
+      while (Date.now() < deadline) {
+        const got = await callTool(client, 'get_mission', { mission_id });
+        assert.equal(got.isError, false, got.text);
+        const body = JSON.parse(got.text) as { status: string };
+        finalStatus = body.status;
+        if (finalStatus === 'done' || finalStatus === 'failed') break;
+        await new Promise((r) => setTimeout(r, 500));
+      }
+      assert.equal(finalStatus, 'done');
       assert.equal(await git(repo, ['status', '--porcelain']), '');
     } finally {
       proc.kill('SIGTERM');
