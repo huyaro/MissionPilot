@@ -1,0 +1,76 @@
+// worktree-mgr (P0: create + isolate only; merge-back is P1).
+// INV-2: one attempt, one worktree; --yolo/bypass only inside the worktree;
+// main is never written to directly. Every worktree is a detached checkout
+// at an exact base commit, registered in SQLite before work starts.
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+
+const execFileAsync = promisify(execFile);
+
+export interface DiffSummary {
+  filesChanged: number;
+  insertions: number;
+  deletions: number;
+  files: string[];
+}
+
+export interface WorktreeInfo {
+  path: string;
+  baseCommit: string;
+}
+
+async function git(repoPath: string, args: string[]): Promise<{ stdout: string; stderr: string }> {
+  return execFileAsync('git', ['-C', repoPath, ...args], { maxBuffer: 10 * 1024 * 1024 });
+}
+
+/** Resolve a repo path to its HEAD commit. Throws if not a git repo. */
+export async function resolveHeadCommit(repoPath: string): Promise<string> {
+  const { stdout } = await git(repoPath, ['rev-parse', 'HEAD']);
+  return stdout.trim();
+}
+
+/**
+ * Create a detached worktree at `baseCommit` (default HEAD) under `worktreePath`.
+ * The caller must register it in the store before the attempt starts.
+ */
+export async function createWorktree(
+  repoPath: string,
+  worktreePath: string,
+  baseCommit?: string,
+): Promise<WorktreeInfo> {
+  const base = baseCommit ?? (await resolveHeadCommit(repoPath));
+  await git(repoPath, ['worktree', 'add', '--detach', worktreePath, base]);
+  return { path: worktreePath, baseCommit: base };
+}
+
+/** Remove a worktree registration and its directory. Best-effort on missing paths. */
+export async function removeWorktree(repoPath: string, worktreePath: string): Promise<void> {
+  await git(repoPath, ['worktree', 'remove', '--force', worktreePath]);
+}
+
+/**
+ * Diff of the worktree against its base commit. INV-3: the verifier (P1) judges
+ * the diff, never exit 0 alone — an agent can exit 0 with an empty diff.
+ */
+export async function diffSummary(worktreePath: string): Promise<DiffSummary> {
+  const { stdout: statusOut } = await git(worktreePath, ['status', '--porcelain']);
+  const files = statusOut
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .map((l) => l.slice(3).trim());
+  const { stdout: statOut } = await git(worktreePath, ['diff', '--shortstat', 'HEAD']);
+  // e.g. " 2 files changed, 10 insertions(+), 3 deletions(-)"
+  const m = /(\d+) files? changed(?:, (\d+) insertions?\(\+\))?(?:, (\d+) deletions?\(-\))?/.exec(
+    statOut,
+  );
+  // Untracked files don't show in `git diff`; status --porcelain lists them,
+  // so files.length (from status) is the authoritative changed-file count.
+  const trackedChanged = m ? Number(m[1]) : 0;
+  return {
+    filesChanged: Math.max(trackedChanged, files.length),
+    insertions: m?.[2] ? Number(m[2]) : 0,
+    deletions: m?.[3] ? Number(m[3]) : 0,
+    files,
+  };
+}
