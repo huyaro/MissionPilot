@@ -7,30 +7,34 @@ on Linux for verification.
 
 ## Run (dev)
 
-Two mutually exclusive ways — pick one, never both at once.
-`npm run tauri dev` already starts its own Vite via `beforeDevCommand`;
-running `npm run dev` alongside it fails with "Port 1420 is already in use".
+Normal path — one command. The app starts its own backend on launch
+(resolved backend JS, fresh token) and connects automatically; the Setup
+screen only appears if that fails:
 
 ```sh
-# Terminal 1 — backend in HTTP mode (token is yours to choose).
-# Needed for both ways below, unless you use the setup screen's
-# "Start backend" button instead:
-cd ../..
-ORCHESTRATOR_TRANSPORT=http ORCHESTRATOR_MCP_TOKEN=<token> node dist/src/server.js
-
-# Way 1 — the Tauri app (normal path):
 cd apps/desktop
 npm run tauri dev
-
-# Way 2 — frontend in the browser only (UI debugging, no Tauri shell):
-cd apps/desktop
-npm run dev   # then open http://localhost:1420
 ```
 
-Or start the app and let it spawn the backend itself: the setup screen's
-"Start backend" button runs `node <repo>/dist/src/server.js --http` with a
-fresh token (Tauri command `start_backend`; the token comes back through
-`get_token`). The backend JS is resolved as: explicit path → packaged
+The frontend itself has two mutually exclusive ways — pick one, never both
+at once. `npm run tauri dev` already starts its own Vite via
+`beforeDevCommand`; running `npm run dev` alongside it fails with
+"Port 1420 is already in use".
+
+- `npm run tauri dev` — the Tauri app (normal path).
+- `npm run dev` — frontend in the browser only (UI debugging, no Tauri
+  shell); open http://localhost:1420.
+
+To run the backend yourself instead (e.g. to attach a debugger), start it
+in a terminal. The app then connects automatically if the token is in the
+same shell's environment, otherwise paste it on the Setup screen:
+
+```sh
+cd ../..
+ORCHESTRATOR_TRANSPORT=http ORCHESTRATOR_MCP_TOKEN=<token> node dist/src/server.js
+```
+
+The backend JS is resolved as: explicit path → packaged
 `<resource_dir>/backend/server.js` → dev layout
 `../../../../dist/src/server.js` from the exe. Node comes from PATH.
 
@@ -66,6 +70,29 @@ find /tmp/tauri-sysroot/usr/lib -type l | while read link; do
 done
 export PKG_CONFIG_PATH=/tmp/tauri-sysroot/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig
 cargo check   # (in src-tauri/)
+
+Update (2026-11-20): the 9 -dev debs above are NOT enough to link anymore.
+The link also needs `libatk1.0-dev libdbus-1-dev libsoup-3.0-dev
+libjavascriptcoregtk-4.1-dev`, and the runtime `.so.0` files
+(`libwebkit2gtk-4.1-0`, `libsoup-3.0-0`, `libjavascriptcoregtk-4.1-0`)
+plus the webkit runtime dep closure (gstreamer1.0-plugins-base/good,
+libgstreamer-plugins-base1.0-0, libgstreamer1.0-0, libsecret-1-0,
+libmanette-0.2-0, … — compute with
+`apt-cache depends --recurse --no-recommends … libwebkit2gtk-4.1-0 …`
+and keep what `dpkg -s` says is not installed). Two gotchas:
+`apt-get download` is ~12 kB/s here (slow mirror redirect) — direct
+`curl` to `azure.archive.ubuntu.com` is ~20x faster; get exact pool paths
+from `apt-cache show <pkg> | grep Filename` (webkit2gtk and libsoup3 are
+in `universe`, not `main`). To RUN the built binary:
+`LD_LIBRARY_PATH=/tmp/tauri-sysroot/usr/lib/x86_64-linux-gnu` plus a
+symlink for the WebKit helpers:
+`ln -s /tmp/tauri-sysroot/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1
+/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1`.
+Xvfb GUI smoke tests currently do NOT work in this image: a minimal
+`eglGetDisplay` test fails with `EGL_BAD_PARAMETER`, so WebKit's
+WebProcess never starts — the app shell stays alive but no page runs.
+That is a VM graphics-stack limitation, not an app bug; verify GUI
+behavior on the Mac.
 ```
 
 ## Packaging gaps (known, for the Mac pass)

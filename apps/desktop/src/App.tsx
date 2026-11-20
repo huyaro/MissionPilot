@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BoardApi, probeHealth, type BoardEventMsg } from './api';
-import { backendStatus, getAppToken, getEnvToken, startBackend } from './tauri';
+import { backendStatus, getAppToken, getEnvToken, isTauri, resolveBackendPath, startBackend } from './tauri';
 import { Overview, type NavTarget } from './pages/Overview';
 import { MissionDetail } from './pages/MissionDetail';
 import { AttemptDetail } from './pages/AttemptDetail';
@@ -25,6 +25,10 @@ export default function App() {
   const [setupError, setSetupError] = useState<string | null>(null);
   const [manualToken, setManualToken] = useState('');
   const [backendJs, setBackendJs] = useState('');
+  // Resolved default backend path (undefined = not looked up yet).
+  const [defaultBackendJs, setDefaultBackendJs] = useState<string | null | undefined>(undefined);
+  // Guard the one-shot auto-start (StrictMode double-invokes effects in dev).
+  const autoStartTried = useRef(false);
   const [nav, setNav] = useState<NavTarget>({ page: 'overview' });
   const [events, setEvents] = useState<BoardEventMsg[]>([]);
   const [pendingCount, setPendingCount] = useState(0);
@@ -42,11 +46,30 @@ export default function App() {
       const appToken = await getAppToken();
       if (appToken) {
         setToken(appToken);
-      } else {
-        // Backend started externally (e.g. in a terminal): use the token
-        // from this process's environment when present.
-        const envToken = await getEnvToken();
-        if (envToken) setToken(envToken);
+        return;
+      }
+      // Backend started externally (e.g. in a terminal): use the token
+      // from this process's environment when present.
+      const envToken = await getEnvToken();
+      if (envToken) setToken(envToken);
+      return;
+    }
+    if (!status.running && isTauri() && !autoStartTried.current) {
+      // Normal path: the app starts its own backend and takes the token
+      // straight from start_backend — no Setup screen, no pasting.
+      // The Setup screen below is only the fallback (auto-start failed,
+      // or an externally started backend with no shared token).
+      autoStartTried.current = true;
+      setStarting(true);
+      try {
+        setDefaultBackendJs(await resolveBackendPath());
+        const newToken = await startBackend(undefined);
+        setToken(newToken);
+        setBackendRunning(true);
+      } catch (e) {
+        setSetupError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setStarting(false);
       }
     }
   }, [token]);
@@ -124,8 +147,8 @@ export default function App() {
     setToken(t);
   };
 
-  if (backendRunning === null) {
-    return <p className="sub" style={{ padding: 32 }}>Checking backend…</p>;
+  if (backendRunning === null || (starting && !token)) {
+    return <p className="sub" style={{ padding: 32 }}>{starting ? 'Starting backend…' : 'Checking backend…'}</p>;
   }
 
   if (!backendRunning || !api) {
@@ -147,6 +170,15 @@ export default function App() {
               style={{ flex: 1 }}
             />
           </div>
+          {defaultBackendJs !== undefined && (
+            <p className="sub">
+              {defaultBackendJs ? (
+                <>Leave blank to use: <span className="mono">{defaultBackendJs}</span></>
+              ) : (
+                'Backend JS not found — run npm run build first, or paste its path above.'
+              )}
+            </p>
+          )}
           <div className="btn-row">
             <button className="btn" disabled={starting} onClick={() => void handleStartBackend()}>
               {starting ? 'Starting…' : 'Start backend'}

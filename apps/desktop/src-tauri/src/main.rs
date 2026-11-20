@@ -78,6 +78,13 @@ fn get_env_token() -> Option<String> {
     std::env::var("ORCHESTRATOR_MCP_TOKEN").ok().filter(|t| !t.trim().is_empty())
 }
 
+/// Path the app would use when the Backend JS field is left blank
+/// (explicit path → packaged → dev layout, same as resolve_backend_js).
+#[tauri::command]
+fn resolve_backend_path(app: AppHandle) -> Option<String> {
+    resolve_backend_js(&app, None).map(|p| p.to_string_lossy().to_string())
+}
+
 #[tauri::command]
 fn start_backend(
     app: AppHandle,
@@ -140,6 +147,7 @@ fn main() {
             backend_status,
             get_token,
             get_env_token,
+            resolve_backend_path,
             start_backend
         ])
         .build(tauri::generate_context!())

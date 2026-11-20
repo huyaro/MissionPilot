@@ -223,6 +223,7 @@
 - P3 Overview 的 Live activity：bus 是内存内事件、不重放，应用启动时先用 ledger 最近 12 条做种子、再由 SSE 追加；否则重启后面板一直空着。
 - P3 DAG 修复（live e2e 发现的真 bug）：依赖任务的 worktree base 必须取 integration 分支头（resolveDispatchBase），且同一 tick 内先合回再派发、派发前重读任务状态；旧实现靠过期快照“恰好”晚一 tick 派发才没炸。另：submitPlan 现拒绝未知任务字段（camelCase dependsOn 曾被静默丢掉、导致依赖边丢失）。
 - P3 桌面补充：后端已在终端启动时，应用读环境变量 ORCHESTRATOR_MCP_TOKEN 自动连接（get_env_token），不用粘贴 token。
+- P3 桌面（2026-11-20 补）：应用启动时后端未运行则自动 start_backend（默认路径解析，token 直接从调用返回）——正常流程不再出现 Setup 屏；Setup 屏只在自动启动失败、或外部后端无共享 token 时作为兜底出现，并显示解析到的默认后端路径（resolve_backend_path）。
 
 ## 10. 非目标（本次不做）
 

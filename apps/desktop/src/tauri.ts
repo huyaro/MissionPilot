@@ -30,6 +30,17 @@ export async function getEnvToken(): Promise<string | null> {
   }
 }
 
+/** Path the app would use when the Backend JS field is left blank
+ * (explicit path → packaged → dev layout). Null when none resolves. */
+export async function resolveBackendPath(): Promise<string | null> {
+  if (!isTauri()) return null;
+  try {
+    return await invoke<string | null>('resolve_backend_path');
+  } catch {
+    return null;
+  }
+}
+
 export async function startBackend(backendJs?: string): Promise<string> {
   return invoke<string>('start_backend', { backendJs: backendJs ?? null });
 }
