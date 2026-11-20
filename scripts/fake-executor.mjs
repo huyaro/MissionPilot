@@ -8,6 +8,9 @@
 //   fail:              message event, stderr text, exit 1
 //   empty:             message event only, writes nothing, exit 0 (INV-3 case)
 //   slow:              like success, but sleeps ~2s first
+//   review-pass:       message event carrying {"verdict":"pass",...}, exit 0
+//   review-fail:       message event carrying {"verdict":"fail",...}, exit 0
+//   review-modify:     writes a file, then a pass verdict (verifier must reject it)
 import { writeFileSync } from 'node:fs';
 
 const args = process.argv.slice(2);
@@ -28,6 +31,16 @@ if (mode === 'slow') {
 }
 
 emit({ type: 'message', content: `fake executor received prompt: ${prompt.slice(0, 80)}` });
+
+if (mode === 'review-pass' || mode === 'review-fail' || mode === 'review-modify') {
+  if (mode === 'review-modify') {
+    writeFileSync('reviewer-touched.txt', 'the reviewer wrote this\n');
+  }
+  const verdict = mode === 'review-fail' ? 'fail' : 'pass';
+  const notes = mode === 'review-fail' ? 'contract not met' : 'looks good';
+  emit({ type: 'message', content: JSON.stringify({ verdict, notes }) });
+  process.exit(0);
+}
 
 if (mode === 'fail') {
   process.stderr.write('simulated failure: fake executor refused the task\n');

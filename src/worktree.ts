@@ -19,6 +19,9 @@ export interface WorktreeInfo {
   baseCommit: string;
 }
 
+/** Branch that accumulates verified attempts, in DAG order (INV-7). */
+export const INTEGRATION_BRANCH = 'orchestrator/integration';
+
 async function git(repoPath: string, args: string[]): Promise<{ stdout: string; stderr: string }> {
   return execFileAsync('git', ['-C', repoPath, ...args], { maxBuffer: 10 * 1024 * 1024 });
 }
@@ -46,6 +49,57 @@ export async function createWorktree(
 /** Remove a worktree registration and its directory. Best-effort on missing paths. */
 export async function removeWorktree(repoPath: string, worktreePath: string): Promise<void> {
   await git(repoPath, ['worktree', 'remove', '--force', worktreePath]);
+}
+
+/** Commit everything in the worktree; returns the new commit SHA. */
+export async function commitWorktree(worktreePath: string, message: string): Promise<string> {
+  await git(worktreePath, ['add', '-A']);
+  await git(worktreePath, [
+    '-c',
+    'user.name=agent-orchestrator',
+    '-c',
+    'user.email=orchestrator@local',
+    'commit',
+    '-m',
+    message,
+  ]);
+  const { stdout } = await git(worktreePath, ['rev-parse', 'HEAD']);
+  return stdout.trim();
+}
+
+async function refExists(repoPath: string, ref: string): Promise<boolean> {
+  try {
+    await git(repoPath, ['show-ref', '--verify', '--quiet', ref]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Create the integration branch from the base commit if it does not exist yet. */
+export async function ensureIntegrationBranch(repoPath: string, baseCommit: string): Promise<void> {
+  if (!(await refExists(repoPath, `refs/heads/${INTEGRATION_BRANCH}`))) {
+    await git(repoPath, ['branch', INTEGRATION_BRANCH, baseCommit]);
+  }
+}
+
+/**
+ * Merge a verified attempt commit into the integration branch (INV-7).
+ * On conflict the merge is aborted and the error propagates — the caller
+ * records it and does not leave a half-merged tree behind.
+ */
+export async function mergeCommitToIntegration(
+  repoPath: string,
+  commitSha: string,
+  message: string,
+): Promise<void> {
+  await git(repoPath, ['checkout', INTEGRATION_BRANCH]);
+  try {
+    await git(repoPath, ['merge', '--no-ff', '-m', message, commitSha]);
+  } catch (err) {
+    await git(repoPath, ['merge', '--abort']).catch(() => undefined);
+    throw err;
+  }
 }
 
 /**
