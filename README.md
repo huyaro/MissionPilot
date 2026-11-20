@@ -18,6 +18,41 @@ node dist/src/server.js          # MCP server over stdio；用 Codex 接入：
 
 数据目录：`$ORCHESTRATOR_DATA_DIR`，默认 `~/.agent-orchestrator`。
 
+## 运行模式
+
+- stdio（默认，Codex 用）：`node dist/src/server.js`
+- HTTP（ChatGPT 经 tunnel 用）：
+
+```sh
+ORCHESTRATOR_TRANSPORT=http \
+ORCHESTRATOR_MCP_TOKEN=<bearer token> \
+ORCHESTRATOR_HTTP_PORT=8788 \
+ORCHESTRATOR_MCP_MODE=full \
+node dist/src/server.js
+```
+
+HTTP 只绑 127.0.0.1；远程接入只走官方 tunnel，不开公网端口。
+`ORCHESTRATOR_MCP_MODE=readonly` 为 P2a 只读（写工具被拒并明示原因）。
+
+## Tunnel（P2，ChatGPT 用）
+
+前置（Platform/ChatGPT 里手动做一次）：建 tunnel、配 Tunnels Read+Use 的
+restricted key、在 ChatGPT 里添加自定义 MCP 服务器（Connection: Tunnel，
+填 tunnel_id）。然后：
+
+```sh
+# macOS 安装：brew install openai/tools/tunnel-client
+ORCHESTRATOR_TRANSPORT=http \
+ORCHESTRATOR_MCP_TOKEN=<bearer token> \
+ORCHESTRATOR_TUNNEL_ID=tunnel_... \
+ORCHESTRATOR_TUNNEL_API_KEY=<restricted key> \
+node dist/src/server.js
+```
+
+编排器以 `tunnel-client run --mcp.server-url http://127.0.0.1:8788/mcp`
+的方式管理 tunnel-client 进程（启动、健康检查、挂了重启）；API key
+不进日志、不落盘。
+
 ## 测试
 
 ```sh

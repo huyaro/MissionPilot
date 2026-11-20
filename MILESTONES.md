@@ -184,13 +184,28 @@
 3. **ChatGPT 档位**：决定 P2b 是否值得做；P0/P1 不卡。
 4. **Tauri Mac 实机**：本机只做 Linux 构建验证；Mac 打包与运行由用户侧验证。
 5. **真实 tunnel**：需 Platform tunnel + restricted key + ChatGPT workspace 关联，用户侧一次性配置。
+   tunnel-client 实测依据（2026-11-20 现读官方 README 与 configuration.md）：
+   `brew install openai/tools/tunnel-client`；运行 `tunnel-client run
+   --mcp.server-url http://127.0.0.1:8788/mcp --control-plane.tunnel-id <id>`，
+   环境变量 `CONTROL_PLANE_API_KEY` + `CONTROL_PLANE_TUNNEL_ID`；健康检查走
+   `--health.url-file` 写出的 /healthz；`tunnel-client doctor --profile <name>` 校验配置。
 
-## 9. 非目标（本次不做）
+## 9. 实现备忘（不改变范围，只记录已定的实现选择）
+
+- 估算单位：任务 estimate 与 mission budget 用抽象单位（planner 自定口径）；
+  有预算的 mission 要求每个任务都带 estimate。
+- 首派执行者固定为 codebuddy（P0 执行者），reroute 去另一家；记分板（P3）上线前不做动态选型。
+- HTTP 端口默认 8788（8787 已被 workbuddy2api 网关占用）；只绑 127.0.0.1；
+  Streamable HTTP 用 JSON 响应模式（enableJsonResponse）；bearer token 必填。
+- Tunnel 健康只认 /healthz 200，进程活着不等于已连通；API key 只走环境变量。
+- 后续任务的 worktree 以当前 integration 分支头为 base（DAG 语义：B 在 A 的合回结果上继续做）。
+
+## 10. 非目标（本次不做）
 
 - 通用 agent 运行时；云端托管；Gemini 执行者；WorkBuddy 直连（无 CLI，走 pi 是另一条线，不在本项目内）。
 - 不碰 LayerFrame、FlowGrid 或任何其他仓库。
 
-## 10. 仓库结构
+## 11. 仓库结构
 
 ```
 agent-orchestrator/
@@ -199,15 +214,19 @@ agent-orchestrator/
   package.json             # 后端（TS + node:sqlite + MCP SDK）
   tsconfig.json
   src/
-    server.ts              # MCP stdio 入口（P0）；P2 增加 HTTP 入口
+    server.ts              # 入口：stdio（P0）/ HTTP + tunnel（P2）
+    mcp.ts                 # MCP 工具接线（两种传输共用；P2a 只读模式）
     store.ts               # mission-store（SQLite）
     worktree.ts            # worktree-mgr
     dispatcher.ts          # dispatcher
     adapters/
       types.ts             # adapter 接口 + 统一事件
+      cli.ts               # 共享 CLI 运行器（spawn/解析/ abort）
+      streamjson.ts        # stream-json 行分类
       codebuddy.ts         # P0
       qoder.ts             # P1
     tools.ts               # MCP 工具定义与校验
+    repo.ts                # P2 读仓工具
     planner.ts             # P1 planner-intake
     scheduler.ts           # P1 scheduler
     verifier.ts            # P1 verifier
