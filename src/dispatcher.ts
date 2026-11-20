@@ -1,9 +1,14 @@
 // dispatcher: build an attempt, give it a worktree, spawn the CLI.
 // INV-1: only the backend dispatches. INV-5: dispatch returns immediately;
 // the run continues in the background and is polled via get_attempt.
+//
+// Task/mission finalization: by default (P0 single-task path) the dispatcher
+// finalizes the task + mission from the attempt outcome. When the P1
+// scheduler owns the task graph, construct with { finalizeTasks: false }
+// and the scheduler drives task/mission transitions instead.
 import { join } from 'node:path';
 import { Store } from './store.js';
-import type { Attempt } from './store.js';
+import type { Attempt, Task } from './store.js';
 import { createWorktree, diffSummary, resolveHeadCommit } from './worktree.js';
 import type { ExecutorAdapter } from './adapters/types.js';
 import { log } from './log.js';
@@ -24,24 +29,33 @@ export interface DispatchResult {
   worktreePath: string;
 }
 
+export interface DispatcherOptions {
+  /** False when the P1 scheduler owns task/mission status. Default true. */
+  finalizeTasks?: boolean;
+}
+
 export class Dispatcher {
   private store: Store;
   private adapters: Map<string, ExecutorAdapter>;
   private dataDir: string;
+  private finalizeTasks: boolean;
+  private running = new Map<string, AbortController>();
 
-  constructor(store: Store, adapters: Map<string, ExecutorAdapter>, dataDir: string) {
+  constructor(
+    store: Store,
+    adapters: Map<string, ExecutorAdapter>,
+    dataDir: string,
+    opts: DispatcherOptions = {},
+  ) {
     this.store = store;
     this.adapters = adapters;
     this.dataDir = dataDir;
+    this.finalizeTasks = opts.finalizeTasks ?? true;
   }
 
+  /** P0 path: create mission + task + attempt, then start it. */
   async dispatch(input: DispatchInput): Promise<DispatchResult> {
-    const adapter = this.adapters.get(input.agent);
-    if (!adapter) {
-      throw new Error(
-        `unknown agent: ${input.agent} (known: ${[...this.adapters.keys()].join(', ')})`,
-      );
-    }
+    const adapter = this.resolveAdapter(input.agent);
     // Throws if workdir is missing or not a git repo — before any record is made.
     const head = await resolveHeadCommit(input.workdir);
 
@@ -61,22 +75,98 @@ export class Dispatcher {
       return { mission, task, attempt };
     });
 
+    const worktreePath = await this.startAttempt(
+      attempt,
+      task,
+      mission.id,
+      adapter,
+      input.workdir,
+      head,
+      input.task.title,
+      input.task.prompt,
+      input.contract,
+    );
+    return { attemptId: attempt.id, missionId: mission.id, taskId: task.id, worktreePath };
+  }
+
+  /**
+   * P1 path: dispatch an attempt for an EXISTING task (from a plan).
+   * The caller (scheduler) owns the task's status transitions.
+   */
+  async dispatchExistingTask(
+    task: Task,
+    agent: string,
+    workdir: string,
+    prompt: string,
+    contract: string,
+  ): Promise<DispatchResult> {
+    const adapter = this.resolveAdapter(agent);
+    const head = await resolveHeadCommit(workdir);
+    const mission = this.store.getMission(task.missionId);
+    if (!mission) throw new Error(`mission not found: ${task.missionId}`);
+    const attempt = this.store.createAttempt({ taskId: task.id, agent });
+    const worktreePath = await this.startAttempt(
+      attempt,
+      task,
+      mission.id,
+      adapter,
+      workdir,
+      head,
+      task.title,
+      prompt,
+      contract,
+    );
+    return { attemptId: attempt.id, missionId: mission.id, taskId: task.id, worktreePath };
+  }
+
+  /** Abort a running attempt (scheduler timeout). Returns false if not running. */
+  abortAttempt(attemptId: string): boolean {
+    const controller = this.running.get(attemptId);
+    if (!controller) return false;
+    controller.abort();
+    return true;
+  }
+
+  private resolveAdapter(agent: string): ExecutorAdapter {
+    const adapter = this.adapters.get(agent);
+    if (!adapter) {
+      throw new Error(
+        `unknown agent: ${agent} (known: ${[...this.adapters.keys()].join(', ')})`,
+      );
+    }
+    return adapter;
+  }
+
+  private async startAttempt(
+    attempt: Attempt,
+    task: Task,
+    missionId: string,
+    adapter: ExecutorAdapter,
+    workdir: string,
+    head: string,
+    title: string,
+    prompt: string,
+    contract: string,
+  ): Promise<string> {
     const wtPath = join(this.dataDir, 'worktrees', attempt.id);
-    const wt = await createWorktree(input.workdir, wtPath, head);
+    const wt = await createWorktree(workdir, wtPath, head);
     this.store.registerWorktree({
       attemptId: attempt.id,
-      repo: input.workdir,
+      repo: workdir,
       baseCommit: wt.baseCommit,
       path: wt.path,
     });
     this.store.updateAttempt(attempt.id, { worktreePath: wt.path, status: 'running' });
     this.store.updateTaskStatus(task.id, 'running');
-    this.store.updateMissionStatus(mission.id, 'executing');
-    log('info', 'attempt started', { attemptId: attempt.id, agent: input.agent, worktree: wt.path });
+    this.store.updateMissionStatus(missionId, 'executing');
+    log('info', 'attempt started', { attemptId: attempt.id, agent: adapter.name, worktree: wt.path });
 
+    const controller = new AbortController();
+    this.running.set(attempt.id, controller);
+    const fullPrompt = [`Task: ${title}`, '', prompt, '', 'Acceptance contract:', contract].join('\n');
     // Background run — dispatch returns without awaiting it (INV-5).
-    void this.runAttempt(attempt.id, task.id, mission.id, adapter, input, wt.path);
-    return { attemptId: attempt.id, missionId: mission.id, taskId: task.id, worktreePath: wt.path };
+    void this.runAttempt(attempt.id, task.id, missionId, adapter, fullPrompt, wt.path, controller);
+    return wt.path;
   }
 
   private async runAttempt(
@@ -84,21 +174,15 @@ export class Dispatcher {
     taskId: string,
     missionId: string,
     adapter: ExecutorAdapter,
-    input: DispatchInput,
+    prompt: string,
     worktreePath: string,
+    controller: AbortController,
   ): Promise<void> {
-    const prompt = [
-      `Task: ${input.task.title}`,
-      '',
-      input.task.prompt,
-      '',
-      'Acceptance contract:',
-      input.contract,
-    ].join('\n');
     try {
       const result = await adapter.run({
         prompt,
         cwd: worktreePath,
+        signal: controller.signal,
         onEvent: (e) => this.store.addEvent(attemptId, e.type, e.payload),
       });
       const diff = await diffSummary(worktreePath).catch(() => null);
@@ -109,10 +193,11 @@ export class Dispatcher {
         stderr: result.stderr === '' ? null : result.stderr,
         diffSummary: diff ? JSON.stringify(diff) : null,
       });
-      // P0: one task per mission, so task + mission follow the attempt.
-      // P1's scheduler owns multi-task mission status.
-      this.store.updateTaskStatus(taskId, failed ? 'failed' : 'done');
-      this.store.updateMissionStatus(missionId, failed ? 'failed' : 'done');
+      if (this.finalizeTasks) {
+        // P0: one task per mission, so task + mission follow the attempt.
+        this.store.updateTaskStatus(taskId, failed ? 'failed' : 'done');
+        this.store.updateMissionStatus(missionId, failed ? 'failed' : 'done');
+      }
       log('info', 'attempt finished', {
         attemptId,
         status: failed ? 'failed' : 'done',
@@ -123,9 +208,13 @@ export class Dispatcher {
       // never leave the attempt stuck in 'running'.
       const message = err instanceof Error ? err.message : String(err);
       this.store.updateAttempt(attemptId, { status: 'failed', stderr: `dispatcher error: ${message}` });
-      this.store.updateTaskStatus(taskId, 'failed');
-      this.store.updateMissionStatus(missionId, 'failed');
+      if (this.finalizeTasks) {
+        this.store.updateTaskStatus(taskId, 'failed');
+        this.store.updateMissionStatus(missionId, 'failed');
+      }
       log('error', 'attempt crashed', { attemptId, error: message });
+    } finally {
+      this.running.delete(attemptId);
     }
   }
 }

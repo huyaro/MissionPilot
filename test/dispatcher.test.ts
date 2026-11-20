@@ -114,6 +114,26 @@ describe('dispatcher', () => {
     }
   });
 
+  it('abortAttempt: scheduler timeout kills the run and the attempt fails', async () => {
+    const { store, dispatcher } = setup('slow');
+    const repo = await makeTempGitRepo();
+    try {
+      const r = await dispatcher.dispatch({
+        agent: 'codebuddy',
+        task: { title: 'Slow one', prompt: 'take your time' },
+        contract: 'done eventually',
+        workdir: repo,
+      });
+      assert.equal(dispatcher.abortAttempt(r.attemptId), true);
+      const attempt = await waitForTerminal(store, r.attemptId);
+      assert.equal(attempt.status, 'failed');
+      assert.equal(attempt.exitCode, null);
+      assert.equal(dispatcher.abortAttempt(r.attemptId), false); // no longer running
+    } finally {
+      store.close();
+    }
+  });
+
   it('recovery marks interrupted attempts failed with a note', () => {
     const store = new Store(tempDbPath());
     try {

@@ -87,7 +87,7 @@ describe('codebuddy adapter', () => {
     try {
       const result = await codebuddyAdapter.run({ prompt: 'x', cwd, onEvent: () => {} });
       assert.equal(result.exitCode, null);
-      assert.match(result.stderr, /failed to spawn codebuddy/);
+      assert.match(result.stderr, /failed to spawn \/nonexistent\/codebuddy/);
     } finally {
       if (prev === undefined) delete process.env.ORCHESTRATOR_CODEBUDDY_BIN;
       else process.env.ORCHESTRATOR_CODEBUDDY_BIN = prev;

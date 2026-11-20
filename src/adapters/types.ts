@@ -22,6 +22,8 @@ export interface RunOptions {
   /** Working directory — always the attempt's worktree (INV-2). */
   cwd: string;
   onEvent: (event: UnifiedEvent) => void;
+  /** Abort the run (scheduler timeout). The adapter kills the child. */
+  signal?: AbortSignal;
 }
 
 export interface ExecutorAdapter {
