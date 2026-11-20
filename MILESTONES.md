@@ -161,13 +161,21 @@
   长时间运行的 attempt 进度与最近事件在总览即时可见。
 - 审批中心：批 plan、批 push/PR，批/拒留痕；push/PR 未经人批不得执行（INV-7）。
 
-### DoD
+### DoD（2026-11-20 VM 侧验证结果）
 
-1. Tauri 应用在 Mac 目标形态下可构建（本机 Linux 构建验证 + 结构自检；Mac 实机验证留待用户）。
-2. 七页齐全，数据来自后端真实状态（非原型写死数据）；SSE 推事件，总览分级刷新。
-3. 记分板与账本数字与 SQLite 记录一致；hash 链可验证。
-4. 审批流闭环：待批 push/PR 在人批之前不执行。
-5. P0–P2 DoD 不退化。
+1. Tauri 应用在 Mac 目标形态下可构建——**VM 侧通过**：前端 `npm run build` 通过；
+   `cargo check` 与 `cargo build`（Linux）通过（-dev 包用 /tmp 提取 sysroot 解决，
+   见 §9）；Mac .app 打包与实机运行仍留待用户侧（§8-4）。
+   另已在 Xvfb 下实跑应用：窗口打开、Setup 屏渲染正常、Overview 以真实后端数据渲染
+   （截图验证，见 §9）。
+2. 七页齐全，数据来自后端真实状态（非原型写死数据）；SSE 推事件，总览分级刷新——**通过**：
+   七页均调 board API；Overview 的 Live activity 由 ledger 种子 + SSE 追加；Xvfb 截图
+   验证 Overview 显示真实 mission 与事件。
+3. 记分板与账本数字与 SQLite 记录一致；hash 链可验证——**通过**：单测 + live e2e
+   （scoreboard 与 ledger 均与 SQLite 一致；篡改 ledger 行后 verifyLedger 报 badSeq）。
+4. 审批流闭环：待批 push/PR 在人批之前不执行——**通过**：单测（本地 bare remote 真 push）
+   + live e2e（批准后无 remote 时诚实 deferred）。
+5. P0–P2 DoD 不退化——**通过**：`npm test` 83 项全绿（含 P0–P2 全部用例）。
 
 ### 测试门
 
@@ -183,6 +191,13 @@
 2. **Codex 经 stdio 调通**：需在 Mac 上 `codex mcp add local-agents -- node <server.js>` 后实测。
 3. **ChatGPT 档位**：决定 P2b 是否值得做；P0/P1 不卡。
 4. **Tauri Mac 实机**：本机只做 Linux 构建验证；Mac 打包与运行由用户侧验证。
+   VM 侧已做的：`cargo check`/`cargo build`（Linux）通过；Xvfb 下实跑应用，
+   Setup 屏与 Overview（真实后端数据）截图验证通过；`tauri build` 的 Mac
+   .app 打包、签名未做。另：`Start backend` 按钮在 VM 的 Xvfb 下曾出现一次
+   XTEST 合成点击无响应的情况（首个点击曾成功触发并暴露了后端路径 bug，
+   随后点击无响应；疑似无窗口管理器的 headless 环境问题，非产品逻辑问题——
+   按钮逻辑本身已由首次点击 + get_env_token 自动连接路径验证；Mac 实机上
+   需点一下确认）。
 5. **真实 tunnel**：需 Platform tunnel + restricted key + ChatGPT workspace 关联，用户侧一次性配置。
    tunnel-client 实测依据（2026-11-20 现读官方 README 与 configuration.md）：
    `brew install openai/tools/tunnel-client`；运行 `tunnel-client run
@@ -204,6 +219,10 @@
 - P3 审批：replan 与 push 两类；拒绝必须填理由；push 只有人批后才执行，且仅当仓库有 origin remote 时才真正 push（无 remote 时诚实报告 deferred）。审批决定进账本。
 - P3 board API：同一 127.0.0.1 端口上的 /api/*（与 MCP 同一个 bearer token）；SSE（EventSource 发不了 Authorization 头）另接受 `?token=`（仅本机，服务器不记请求 URL）。
 - P3 桌面：Tauri 2.x + React 19 + Vite；后端由 Tauri 以子进程管理（start_backend，token 经 get_token 回传）；node 取自 PATH（打包进 .app 是后续步骤）。VM 上装 -dev 包被镜像的 libzstd1（+hatch1）挡住——未降级系统库，改用 /tmp 提取 sysroot（见 apps/desktop/README.md）。
+- P3 board API 需 CORS：前端跑在 Tauri webview（打包后 tauri:// origin，dev 时 localhost:1420），调 127.0.0.1:8788 属跨域——/api/* 回 `Access-Control-Allow-Origin: *` + 预检 OPTIONS 204；服务器只绑本机且每次调用仍需 bearer token，CORS 不绕过鉴权。
+- P3 Overview 的 Live activity：bus 是内存内事件、不重放，应用启动时先用 ledger 最近 12 条做种子、再由 SSE 追加；否则重启后面板一直空着。
+- P3 DAG 修复（live e2e 发现的真 bug）：依赖任务的 worktree base 必须取 integration 分支头（resolveDispatchBase），且同一 tick 内先合回再派发、派发前重读任务状态；旧实现靠过期快照“恰好”晚一 tick 派发才没炸。另：submitPlan 现拒绝未知任务字段（camelCase dependsOn 曾被静默丢掉、导致依赖边丢失）。
+- P3 桌面补充：后端已在终端启动时，应用读环境变量 ORCHESTRATOR_MCP_TOKEN 自动连接（get_env_token），不用粘贴 token。
 
 ## 10. 非目标（本次不做）
 

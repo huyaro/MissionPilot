@@ -19,6 +19,17 @@ export async function getAppToken(): Promise<string | null> {
   }
 }
 
+/** Token for a backend the user started themselves (ORCHESTRATOR_MCP_TOKEN
+ * in the app's environment). Lets the app connect without pasting. */
+export async function getEnvToken(): Promise<string | null> {
+  if (!isTauri()) return null;
+  try {
+    return await invoke<string | null>('get_env_token');
+  } catch {
+    return null;
+  }
+}
+
 export async function startBackend(backendJs?: string): Promise<string> {
   return invoke<string>('start_backend', { backendJs: backendJs ?? null });
 }

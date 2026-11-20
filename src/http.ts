@@ -126,6 +126,22 @@ export class HttpMcpServer {
       return;
     }
     if (url.pathname.startsWith('/api/')) {
+      // CORS: the board frontend runs in the Tauri webview (tauri://
+      // origin in the packaged app, localhost:1420 in dev), so browser
+      // fetches to this API are cross-origin. The server is localhost-only
+      // and every /api/* call still needs the bearer token — CORS only lets
+      // the browser read the response, it does not bypass auth.
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+      res.setHeader(
+        'Access-Control-Allow-Headers',
+        'authorization, content-type, mcp-session-id',
+      );
+      if (req.method === 'OPTIONS') {
+        res.writeHead(204);
+        res.end();
+        return;
+      }
       if (!this.checkAuth(req)) {
         res.writeHead(401, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'unauthorized' }));

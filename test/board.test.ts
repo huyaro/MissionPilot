@@ -55,6 +55,16 @@ describe('board API', () => {
     assert.equal(res.status, 401);
   });
 
+  it('answers CORS preflights and labels API responses (Tauri webview origin)', async () => {
+    const pre = await fetch(`${base}/api/missions`, { method: 'OPTIONS' });
+    assert.equal(pre.status, 204);
+    assert.equal(pre.headers.get('access-control-allow-origin'), '*');
+    const res = await fetch(`${base}/api/missions`, {
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    assert.equal(res.headers.get('access-control-allow-origin'), '*');
+  });
+
   it('lists missions and mission detail with budget summary', async () => {
     const m = store.createMission({ goal: 'board test', repo: '/tmp/repo', budget: 10, source: 'codex' });
     store.createTask({ missionId: m.id, key: 't1', title: 'one', contract: 'c', estimate: 4 });

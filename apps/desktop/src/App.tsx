@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BoardApi, probeHealth, type BoardEventMsg } from './api';
-import { backendStatus, getAppToken, startBackend } from './tauri';
+import { backendStatus, getAppToken, getEnvToken, startBackend } from './tauri';
 import { Overview, type NavTarget } from './pages/Overview';
 import { MissionDetail } from './pages/MissionDetail';
 import { AttemptDetail } from './pages/AttemptDetail';
@@ -40,7 +40,14 @@ export default function App() {
     setBackendRunning(status.running);
     if (status.running && !token) {
       const appToken = await getAppToken();
-      if (appToken) setToken(appToken);
+      if (appToken) {
+        setToken(appToken);
+      } else {
+        // Backend started externally (e.g. in a terminal): use the token
+        // from this process's environment when present.
+        const envToken = await getEnvToken();
+        if (envToken) setToken(envToken);
+      }
     }
   }, [token]);
 
@@ -51,6 +58,20 @@ export default function App() {
   // Live events (SSE) + sidebar counters, once we have a token.
   useEffect(() => {
     if (!api) return;
+    // Seed the activity feed from the ledger (recent history), then let
+    // SSE append live events. The bus is in-memory and does not replay,
+    // so without this the panel would sit empty after a restart.
+    api
+      .ledger()
+      .then((r) =>
+        setEvents(
+          r.entries
+            .slice(-12)
+            .reverse()
+            .map((e) => ({ type: e.type, ts: e.ts, summary: e.detail })),
+        ),
+      )
+      .catch(() => undefined);
     let close: (() => void) | null = null;
     try {
       close = api.subscribeEvents((e) => {

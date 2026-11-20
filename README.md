@@ -53,6 +53,24 @@ node dist/src/server.js
 的方式管理 tunnel-client 进程（启动、健康检查、挂了重启）；API key
 不进日志、不落盘。
 
+## 桌面看板（P3，Tauri）
+
+```sh
+cd apps/desktop
+npm install
+npm run dev     # 前端 dev server（http://localhost:1420）
+# 另开终端：启动后端（见上），再运行 Tauri 应用：
+npm run tauri dev
+```
+
+打包：`npm run tauri build`（Mac 上出 .app）。应用启动时若后端未运行，
+Setup 屏可一键启动后端（子进程管理，token 自动回传）；后端已在终端启动
+时，应用读取环境变量 `ORCHESTRATOR_MCP_TOKEN` 自动连接。
+
+看板 API：同一 127.0.0.1:8788 端口上的 `/api/*`（与 MCP 同一个 bearer
+token；SSE 用 `?token=`，见 `src/board.ts`）。七页：总览、Mission 详情、
+Attempt 详情、审批中心、记分板、账本、连接。
+
 ## 测试
 
 ```sh

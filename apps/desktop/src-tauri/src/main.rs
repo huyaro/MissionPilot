@@ -50,8 +50,8 @@ fn resolve_backend_js(app: &AppHandle, explicit: Option<String>) -> Option<PathB
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             // exe is .../src-tauri/target/debug/<bin>; dev backend is at
-            // repo root dist/src/server.js (four levels up from debug/).
-            let dev = dir.join("../../../../dist/src/server.js");
+            // repo root dist/src/server.js (five levels up from debug/).
+            let dev = dir.join("../../../../../dist/src/server.js");
             if dev.exists() {
                 return Some(dev);
             }
@@ -68,6 +68,14 @@ fn backend_status() -> serde_json::Value {
 #[tauri::command]
 fn get_token(state: State<'_, AppState>) -> Option<String> {
     state.token.lock().ok().and_then(|t| t.clone())
+}
+
+/// Token for a backend the user started themselves (e.g. in a terminal):
+/// if ORCHESTRATOR_MCP_TOKEN is in this process's environment, the app
+/// can connect without the user pasting it.
+#[tauri::command]
+fn get_env_token() -> Option<String> {
+    std::env::var("ORCHESTRATOR_MCP_TOKEN").ok().filter(|t| !t.trim().is_empty())
 }
 
 #[tauri::command]
@@ -131,6 +139,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             backend_status,
             get_token,
+            get_env_token,
             start_backend
         ])
         .build(tauri::generate_context!())
