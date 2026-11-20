@@ -24,12 +24,16 @@ const BODY_LIMIT = 10 * 1024 * 1024;
 // codebuddy + qoder are the P0/P1 executors (binary presence = reachable);
 // workbuddy has no CLI and stays 'pending' (pi route is out of scope);
 // gemini is 'not-connected' (consumer plan cannot be wrapped, per ToS).
-const EXECUTORS = [
-  { id: 'codebuddy', label: 'CodeBuddy', bin: process.env.ORCHESTRATOR_CODEBUDDY_BIN ?? 'codebuddy' },
-  { id: 'qoder', label: 'Qoder', bin: process.env.ORCHESTRATOR_QODER_BIN ?? 'qoder' },
-  { id: 'workbuddy', label: 'WorkBuddy', bin: null },
-  { id: 'gemini', label: 'Gemini', bin: null },
-] as const;
+// Read at request time (not module load) so tests can point the probe at
+// controlled paths; binary presence is still the reachability signal.
+function getExecutors() {
+  return [
+    { id: 'codebuddy', label: 'CodeBuddy', bin: process.env.ORCHESTRATOR_CODEBUDDY_BIN ?? 'codebuddy' },
+    { id: 'qoder', label: 'Qoder', bin: process.env.ORCHESTRATOR_QODER_BIN ?? 'qoder' },
+    { id: 'workbuddy', label: 'WorkBuddy', bin: null },
+    { id: 'gemini', label: 'Gemini', bin: null },
+  ] as const;
+}
 
 type ExecutorState = 'connected' | 'pending' | 'not-connected' | 'missing';
 
@@ -172,7 +176,7 @@ export function createBoardHandler(deps: BoardDeps) {
       // -- executors ---------------------------------------------------------
       if (req.method === 'GET' && path === '/api/executors') {
         const executors = await Promise.all(
-          EXECUTORS.map(async (e) => {
+          getExecutors().map(async (e) => {
             let state: ExecutorState;
             if (e.id === 'workbuddy') state = 'pending';
             else if (e.id === 'gemini') state = 'not-connected';
@@ -187,7 +191,7 @@ export function createBoardHandler(deps: BoardDeps) {
       const configMatch = /^\/api\/executors\/([^/]+)\/config$/.exec(path);
       if (configMatch && (req.method === 'GET' || req.method === 'PUT')) {
         const agent = configMatch[1];
-        if (!EXECUTORS.some((e) => e.id === agent)) {
+        if (!getExecutors().some((e) => e.id === agent)) {
           json(res, 404, { error: 'unknown executor' });
           return true;
         }
@@ -260,7 +264,7 @@ export function createBoardHandler(deps: BoardDeps) {
           ],
           tunnel,
           executors: (await Promise.all(
-            EXECUTORS.map(async (e) => {
+            getExecutors().map(async (e) => {
               let state: ExecutorState;
               if (e.id === 'workbuddy') state = 'pending';
               else if (e.id === 'gemini') state = 'not-connected';

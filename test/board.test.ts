@@ -14,6 +14,8 @@ const TOKEN = 'board-test-token';
 let store: Store;
 let http: HttpMcpServer;
 let base: string;
+let prevCodebuddyBin: string | undefined;
+let prevQoderBin: string | undefined;
 
 async function api(path: string, opts: RequestInit = {}): Promise<{ status: number; body: any }> {
   const res = await fetch(`${base}${path}`, {
@@ -26,6 +28,12 @@ async function api(path: string, opts: RequestInit = {}): Promise<{ status: numb
 
 describe('board API', () => {
   before(async () => {
+    // Point the executor probe at nonexistent binaries so the state
+    // assertions hold on any machine, even one with the CLIs installed.
+    prevCodebuddyBin = process.env.ORCHESTRATOR_CODEBUDDY_BIN;
+    prevQoderBin = process.env.ORCHESTRATOR_QODER_BIN;
+    process.env.ORCHESTRATOR_CODEBUDDY_BIN = '/nonexistent/codebuddy';
+    process.env.ORCHESTRATOR_QODER_BIN = '/nonexistent/qoder';
     const dataDir = mkdtempSync(join(tmpdir(), 'orch-board-'));
     store = new Store(join(dataDir, 'db.sqlite'));
     const dispatcher = new Dispatcher(store, new Map(), dataDir);
@@ -48,6 +56,10 @@ describe('board API', () => {
   after(async () => {
     await http.close();
     store.close();
+    if (prevCodebuddyBin === undefined) delete process.env.ORCHESTRATOR_CODEBUDDY_BIN;
+    else process.env.ORCHESTRATOR_CODEBUDDY_BIN = prevCodebuddyBin;
+    if (prevQoderBin === undefined) delete process.env.ORCHESTRATOR_QODER_BIN;
+    else process.env.ORCHESTRATOR_QODER_BIN = prevQoderBin;
   });
 
   it('rejects /api/* without a token', async () => {
@@ -101,7 +113,7 @@ describe('board API', () => {
     const execs = await api('/api/executors');
     assert.equal(execs.status, 200);
     const byId = new Map(execs.body.executors.map((e: any) => [e.id, e]));
-    assert.equal((byId.get('codebuddy') as any).state, 'missing'); // VM has no codebuddy binary
+    assert.equal((byId.get('codebuddy') as any).state, 'missing'); // probe pointed at a nonexistent binary in before()
     assert.equal((byId.get('workbuddy') as any).state, 'pending');
     assert.equal((byId.get('gemini') as any).state, 'not-connected');
 
