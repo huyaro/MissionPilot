@@ -113,7 +113,16 @@ describe('MCP server over stdio', () => {
       const tools = (list.result as unknown as { tools: Array<{ name: string }> }).tools;
       assert.deepEqual(
         tools.map((t) => t.name).sort(),
-        ['create_mission', 'dispatch_task', 'get_attempt', 'get_mission', 'submit_plan'],
+        [
+          'create_mission',
+          'dispatch_task',
+          'get_attempt',
+          'get_mission',
+          'read_file',
+          'repo_map',
+          'search_code',
+          'submit_plan',
+        ],
       );
 
       const dispatch = await callTool(client, 'dispatch_task', {
