@@ -12,8 +12,8 @@ agent CLI（先 CodeBuddy、Qoder），自己验收、循环改到过为止；�
 ```sh
 npm install
 npm run build
-node dist/server.js            # MCP server over stdio；用 Codex 接入：
-# codex mcp add local-agents -- node /path/to/agent-orchestrator/dist/server.js
+node dist/src/server.js          # MCP server over stdio；用 Codex 接入：
+# codex mcp add local-agents -- node /path/to/agent-orchestrator/dist/src/server.js
 ```
 
 数据目录：`$ORCHESTRATOR_DATA_DIR`，默认 `~/.agent-orchestrator`。

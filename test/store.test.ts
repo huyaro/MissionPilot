@@ -1,8 +1,8 @@
 // store (mission-store) tests — INV-8: state survives a backend restart.
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { Store } from '../src/store.ts';
-import { tempDbPath } from './helpers.ts';
+import { Store } from '../src/store.js';
+import { tempDbPath } from './helpers.js';
 
 describe('Store', () => {
   it('creates and reads back mission / task / attempt', () => {

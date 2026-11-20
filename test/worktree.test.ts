@@ -3,8 +3,8 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { createWorktree, diffSummary, removeWorktree, resolveHeadCommit } from '../src/worktree.ts';
-import { makeTempGitRepo, git } from './helpers.ts';
+import { createWorktree, diffSummary, removeWorktree, resolveHeadCommit } from '../src/worktree.js';
+import { makeTempGitRepo, git } from './helpers.js';
 
 describe('worktree-mgr', () => {
   it('creates a detached worktree at HEAD and main stays clean', async () => {
