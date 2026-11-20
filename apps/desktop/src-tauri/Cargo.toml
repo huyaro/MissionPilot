@@ -1,5 +1,5 @@
 [package]
-name = "orchestrator-board"
+name = "mission-pilot-board"
 version = "0.1.0"
 edition = "2021"
 

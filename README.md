@@ -1,11 +1,11 @@
-# agent-orchestrator
+# MissionPilot
 
 自研多 agent 编排系统：本地后端，接受 Codex / ChatGPT（经插件）下的单，把任务派给本地已登录的
 agent CLI（先 CodeBuddy、Qoder），自己验收、循环改到过为止；人只在关键点审批。
 
 - 方向与里程碑：见 `MILESTONES.md`（P0–P3、DoD、测试门）。
 - 架构梳理稿：`~/workspace/multi-agent-orchestrator-architecture.md`。
-- 状态：P0 执行中。本地 git only，暂不同步远程。
+- 状态：P0–P3 已完成，已同步到 GitHub（huyaro/MissionPilot）。
 
 ## 运行（P0）
 
@@ -13,10 +13,10 @@ agent CLI（先 CodeBuddy、Qoder），自己验收、循环改到过为止；�
 npm install
 npm run build
 node dist/src/server.js          # MCP server over stdio；用 Codex 接入：
-# codex mcp add local-agents -- node /path/to/agent-orchestrator/dist/src/server.js
+# codex mcp add local-agents -- node /path/to/MissionPilot/dist/src/server.js
 ```
 
-数据目录：`$ORCHESTRATOR_DATA_DIR`，默认 `~/.agent-orchestrator`。
+数据目录：`$ORCHESTRATOR_DATA_DIR`，默认 `~/.mission-pilot`。
 
 ## 运行模式
 

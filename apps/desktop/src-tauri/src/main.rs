@@ -1,4 +1,4 @@
-// Orchestrator Board — Tauri shell (P3).
+// MissionPilot — Tauri shell (P3).
 // The board frontend talks to the local backend over HTTP (127.0.0.1:8788).
 // This shell manages the backend as a child process: start_backend spawns
 // `node <backend.js> --http` with a fresh bearer token, and the child is

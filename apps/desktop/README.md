@@ -1,4 +1,4 @@
-# Orchestrator Board — Tauri desktop app (P3)
+# MissionPilot — Tauri desktop app (P3)
 
 The desktop board for the local orchestrator backend. React 19 + Vite
 frontend inside a Tauri 2.x shell; the TypeScript backend runs as a

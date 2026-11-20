@@ -79,9 +79,9 @@ export async function commitWorktree(worktreePath: string, message: string): Pro
   await git(worktreePath, ['add', '-A']);
   await git(worktreePath, [
     '-c',
-    'user.name=agent-orchestrator',
+    'user.name=MissionPilot',
     '-c',
-    'user.email=orchestrator@local',
+    'user.email=missionpilot@local',
     'commit',
     '-m',
     message,

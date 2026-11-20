@@ -153,9 +153,9 @@ export function nowIso(): string {
   return new Date().toISOString();
 }
 
-/** Data dir: $ORCHESTRATOR_DATA_DIR, else ~/.agent-orchestrator. */
+/** Data dir: $ORCHESTRATOR_DATA_DIR, else ~/.mission-pilot. */
 export function resolveDataDir(): string {
-  return process.env.ORCHESTRATOR_DATA_DIR ?? join(homedir(), '.agent-orchestrator');
+  return process.env.ORCHESTRATOR_DATA_DIR ?? join(homedir(), '.mission-pilot');
 }
 
 export function resolveDbPath(dataDir: string = resolveDataDir()): string {

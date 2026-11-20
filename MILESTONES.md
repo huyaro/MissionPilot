@@ -1,7 +1,7 @@
-# Agent Orchestrator — 里程碑文档（P0–P3）
+# MissionPilot — 里程碑文档（P0–P3）
 
 日期：2026-11-20
-状态：执行中。方向与 UI 已由用户确认（2026-11-20）；本地 git 分阶段执行，暂不同步远程（GitHub 地址后续再给）。
+状态：P0–P3 已完成（2026-11-20），已同步到 GitHub（huyaro/MissionPilot）。
 依据：`~/workspace/multi-agent-orchestrator-architecture.md`（梳理稿，§0–§5）与
 `~/workspace/multi-agent-orchestrator-P0-draft.md`（P0 预检草稿）。本文档只转写梳理稿的
 范围，不新增功能；与梳理稿冲突时以梳理稿为准。
@@ -232,7 +232,7 @@
 ## 11. 仓库结构
 
 ```
-agent-orchestrator/
+MissionPilot/
   MILESTONES.md            # 本文档
   README.md
   package.json             # 后端（TS + node:sqlite + MCP SDK）

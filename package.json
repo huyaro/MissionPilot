@@ -10,7 +10,7 @@
   "engines": {
     "node": ">=22"
   },
-  "name": "agent-orchestrator",
+  "name": "mission-pilot",
   "private": true,
   "scripts": {
     "build": "tsc",

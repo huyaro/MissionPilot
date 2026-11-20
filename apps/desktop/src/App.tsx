@@ -132,7 +132,7 @@ export default function App() {
     return (
       <div className="setup">
         <div className="card">
-          <h1>Orchestrator Board</h1>
+          <h1>MissionPilot</h1>
           <p className="sub">
             The backend is not running on 127.0.0.1:8788. Start it from the app (the app spawns
             the backend as a managed process), or start it yourself and paste the token.
@@ -185,7 +185,7 @@ export default function App() {
   return (
     <div className="app">
       <aside className="sidebar">
-        <div className="brand">Orchestrator Board</div>
+        <div className="brand">MissionPilot</div>
         {NAV.map((n) => (
           <button
             key={n.id}
