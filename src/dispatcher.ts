@@ -11,6 +11,8 @@ import { Store } from './store.js';
 import type { Attempt, Task } from './store.js';
 import { createWorktree, diffSummary, resolveHeadCommit } from './worktree.js';
 import type { ExecutorAdapter } from './adapters/types.js';
+import { appendLedger } from './ledger.js';
+import { publishBoardEvent } from './bus.js';
 import { log } from './log.js';
 
 export interface DispatchInput {
@@ -159,6 +161,14 @@ export class Dispatcher {
     this.store.updateAttempt(attempt.id, { worktreePath: wt.path, status: 'running' });
     this.store.updateTaskStatus(task.id, 'running');
     this.store.updateMissionStatus(missionId, 'executing');
+    appendLedger(this.store, 'attempt_started', attempt.id, missionId, `${adapter.name}: ${title}`);
+    publishBoardEvent({
+      type: 'attempt_started',
+      missionId,
+      taskId: task.id,
+      attemptId: attempt.id,
+      summary: `${adapter.name} started: ${title}`,
+    });
     log('info', 'attempt started', { attemptId: attempt.id, agent: adapter.name, worktree: wt.path });
 
     const controller = new AbortController();
@@ -193,6 +203,20 @@ export class Dispatcher {
         stderr: result.stderr === '' ? null : result.stderr,
         diffSummary: diff ? JSON.stringify(diff) : null,
       });
+      appendLedger(
+        this.store,
+        'attempt_finished',
+        attemptId,
+        missionId,
+        `${adapter.name} ${failed ? 'failed' : 'done'} (exit ${result.exitCode})`,
+      );
+      publishBoardEvent({
+        type: 'attempt_finished',
+        missionId,
+        taskId,
+        attemptId,
+        summary: `${adapter.name} ${failed ? 'failed' : 'done'} (exit ${result.exitCode})`,
+      });
       if (this.finalizeTasks) {
         // P0: one task per mission, so task + mission follow the attempt.
         this.store.updateTaskStatus(taskId, failed ? 'failed' : 'done');
@@ -208,6 +232,20 @@ export class Dispatcher {
       // never leave the attempt stuck in 'running'.
       const message = err instanceof Error ? err.message : String(err);
       this.store.updateAttempt(attemptId, { status: 'failed', stderr: `dispatcher error: ${message}` });
+      appendLedger(
+        this.store,
+        'attempt_finished',
+        attemptId,
+        missionId,
+        `${adapter.name} crashed: ${message}`,
+      );
+      publishBoardEvent({
+        type: 'attempt_finished',
+        missionId,
+        taskId,
+        attemptId,
+        summary: `${adapter.name} crashed: ${message}`,
+      });
       if (this.finalizeTasks) {
         this.store.updateTaskStatus(taskId, 'failed');
         this.store.updateMissionStatus(missionId, 'failed');

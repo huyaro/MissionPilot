@@ -22,6 +22,8 @@ export interface HttpMcpServerOptions {
   token: string;
   /** P2a read-only mode. */
   readOnly?: boolean;
+  /** P3 board API handler (REST + SSE) for /api/* paths; same bearer auth. */
+  board?: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
 }
 
 export class HttpMcpServer {
@@ -31,6 +33,7 @@ export class HttpMcpServer {
   private host: string;
   private token: string;
   private readOnly: boolean;
+  private board?: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
   private httpServer: ReturnType<typeof createServer> | null = null;
   private transports = new Map<string, StreamableHTTPServerTransport>();
 
@@ -42,6 +45,7 @@ export class HttpMcpServer {
     this.host = opts.host ?? '127.0.0.1';
     this.token = opts.token;
     this.readOnly = opts.readOnly ?? false;
+    this.board = opts.board;
   }
 
   get mode(): 'full' | 'readonly' {
@@ -108,6 +112,17 @@ export class HttpMcpServer {
     if (url.pathname === '/health' && req.method === 'GET') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ ok: true, mode: this.mode, sessions: this.transports.size }));
+      return;
+    }
+    if (url.pathname.startsWith('/api/')) {
+      if (!this.checkAuth(req)) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'unauthorized' }));
+        return;
+      }
+      if (this.board && (await this.board(req, res))) return;
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'not found' }));
       return;
     }
     if (url.pathname !== '/mcp') {

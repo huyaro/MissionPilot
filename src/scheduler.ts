@@ -10,6 +10,9 @@ import { Dispatcher } from './dispatcher.js';
 import { Verifier } from './verifier.js';
 import type { VerifyResult } from './verifier.js';
 import { decideNextAction } from './reviser.js';
+import { appendLedger } from './ledger.js';
+import { publishBoardEvent } from './bus.js';
+import { createPushApproval, createReplanApproval } from './approvals.js';
 import {
   commitWorktree,
   ensureIntegrationBranch,
@@ -127,12 +130,19 @@ export class Scheduler {
     const finalTasks = this.store.listTasksByMission(mission.id);
     if (finalTasks.length > 0 && finalTasks.every((t) => t.status === 'done')) {
       this.store.updateMissionStatus(mission.id, 'done');
+      appendLedger(this.store, 'mission_done', mission.id, mission.id, mission.goal);
+      publishBoardEvent({ type: 'mission_done', missionId: mission.id, summary: mission.goal });
+      // INV-7: the integration branch is ready to push only after a human
+      // approves it in the board.
+      createPushApproval(this.store, mission.id, mission.repo);
       log('info', 'mission done', { missionId: mission.id });
     } else if (
       finalTasks.some((t) => t.status === 'failed') &&
       finalTasks.every((t) => t.status === 'done' || t.status === 'failed')
     ) {
       this.store.updateMissionStatus(mission.id, 'failed');
+      appendLedger(this.store, 'mission_failed', mission.id, mission.id, mission.goal);
+      publishBoardEvent({ type: 'mission_failed', missionId: mission.id, summary: mission.goal });
       log('info', 'mission failed', { missionId: mission.id });
     }
   }
@@ -159,6 +169,20 @@ export class Scheduler {
     } else {
       verify = await this.verifier.verify(attempt, task);
     }
+    appendLedger(
+      this.store,
+      'attempt_verified',
+      attempt.id,
+      mission.id,
+      `${attempt.agent} ${verify.passed ? 'passed' : 'failed'}: ${task.title}`,
+    );
+    publishBoardEvent({
+      type: 'attempt_verified',
+      missionId: mission.id,
+      taskId: task.id,
+      attemptId: attempt.id,
+      summary: `${attempt.agent} ${verify.passed ? 'passed' : 'failed'}: ${task.title}`,
+    });
     if (verify.passed) {
       this.store.updateTaskStatus(task.id, 'done');
       return;
@@ -188,6 +212,7 @@ export class Scheduler {
         taskId: task.id,
         reason: decision.reason,
       });
+      createReplanApproval(this.store, mission.id, task.id, decision.reason);
       this.store.updateTaskStatus(task.id, 'failed');
       log('warn', 'task failed terminally, replan proposed', { task: task.key, reason: decision.reason });
     }
@@ -214,6 +239,20 @@ export class Scheduler {
         );
         this.store.updateWorktree(wt.id, { status: 'merged', mergedCommit: sha });
         await removeWorktree(mission.repo, attempt.worktreePath).catch(() => undefined);
+        appendLedger(
+          this.store,
+          'attempt_merged',
+          attempt.id,
+          mission.id,
+          `merged ${sha.slice(0, 12)}: ${task.title}`,
+        );
+        publishBoardEvent({
+          type: 'attempt_merged',
+          missionId: mission.id,
+          taskId: task.id,
+          attemptId: attempt.id,
+          summary: `merged: ${task.title}`,
+        });
         log('info', 'attempt merged', { attemptId: attempt.id, task: task.key, commit: sha });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -222,6 +261,7 @@ export class Scheduler {
           taskId: task.id,
           reason: `merge failed: ${message}`,
         });
+        createReplanApproval(this.store, mission.id, task.id, `merge failed: ${message}`);
         this.store.updateTaskStatus(task.id, 'failed');
         log('error', 'merge failed, task failed', { task: task.key, error: message });
       }

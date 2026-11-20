@@ -10,6 +10,7 @@ import { Dispatcher, recoverInterruptedAttempts } from './dispatcher.js';
 import { Scheduler } from './scheduler.js';
 import { Verifier } from './verifier.js';
 import { HttpMcpServer } from './http.js';
+import { createBoardHandler } from './board.js';
 import { TunnelManager } from './tunnel.js';
 import { codebuddyAdapter } from './adapters/codebuddy.js';
 import { qoderAdapter } from './adapters/qoder.js';
@@ -44,11 +45,15 @@ async function main(): Promise<void> {
     }
     const port = Number(process.env.ORCHESTRATOR_HTTP_PORT ?? 8788);
     const readOnly = (process.env.ORCHESTRATOR_MCP_MODE ?? 'full') === 'readonly';
-    const http = new HttpMcpServer(store, dispatcher, { port, token, readOnly });
+    let tunnel: TunnelManager | null = null;
+    const board = createBoardHandler({
+      store,
+      getTunnelStatus: () => tunnel?.status() ?? null,
+    });
+    const http = new HttpMcpServer(store, dispatcher, { port, token, readOnly, board });
     const actualPort = await http.listen();
     scheduler.start(tick);
 
-    let tunnel: TunnelManager | null = null;
     const tunnelId = process.env.ORCHESTRATOR_TUNNEL_ID;
     if (tunnelId) {
       const apiKey = process.env.ORCHESTRATOR_TUNNEL_API_KEY;

@@ -7,7 +7,7 @@ import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 export type MissionStatus =
   | 'created'
@@ -109,6 +109,42 @@ export interface ReplanProposal {
   createdAt: string;
 }
 
+/** P3 ledger entry (hash-chained audit row; see ledger.ts). */
+export interface LedgerRow {
+  seq: number;
+  ts: string;
+  type: string;
+  refId: string | null;
+  missionId: string | null;
+  detail: string;
+  prevHash: string;
+  hash: string;
+}
+
+export type ApprovalKind = 'replan' | 'push';
+export type ApprovalStatus = 'pending' | 'approved' | 'rejected';
+
+export interface Approval {
+  id: string;
+  kind: ApprovalKind;
+  missionId: string;
+  taskId: string | null;
+  summary: string;
+  status: ApprovalStatus;
+  reason: string | null;
+  createdAt: string;
+  decidedAt: string | null;
+}
+
+/** P3 executor display config (models / reasoning level), set from the board. */
+export interface ExecutorConfig {
+  agent: string;
+  models: string[];
+  defaultModel: string | null;
+  reasoning: string | null;
+  updatedAt: string;
+}
+
 export function newId(prefix: string): string {
   return `${prefix}_${randomUUID().replace(/-/g, '').slice(0, 12)}`;
 }
@@ -197,9 +233,39 @@ CREATE TABLE IF NOT EXISTS replan_proposals (
   reason TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS ledger (
+  seq INTEGER PRIMARY KEY,
+  ts TEXT NOT NULL,
+  type TEXT NOT NULL,
+  ref_id TEXT,
+  mission_id TEXT,
+  detail TEXT NOT NULL,
+  prev_hash TEXT NOT NULL,
+  hash TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS approvals (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  mission_id TEXT NOT NULL REFERENCES missions(id),
+  task_id TEXT,
+  summary TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  reason TEXT,
+  created_at TEXT NOT NULL,
+  decided_at TEXT
+);
+CREATE TABLE IF NOT EXISTS executor_config (
+  agent TEXT PRIMARY KEY,
+  models TEXT NOT NULL DEFAULT '[]',
+  default_model TEXT,
+  reasoning TEXT,
+  updated_at TEXT NOT NULL
+);
 CREATE INDEX IF NOT EXISTS idx_tasks_mission ON tasks(mission_id);
 CREATE INDEX IF NOT EXISTS idx_attempts_task ON attempts(task_id);
 CREATE INDEX IF NOT EXISTS idx_events_attempt ON events(attempt_id, seq);
+CREATE INDEX IF NOT EXISTS idx_ledger_mission ON ledger(mission_id);
+CREATE INDEX IF NOT EXISTS idx_approvals_status ON approvals(status);
 `;
 
 export class Store {
@@ -245,6 +311,29 @@ export class Store {
       addCol('missions', 'budget', 'INTEGER');
       addCol('attempts', 'evidence', 'TEXT');
       addCol('tasks', 'prompt', "TEXT NOT NULL DEFAULT ''");
+    }
+    if (version < 4) {
+      // CREATE TABLE IF NOT EXISTS in SCHEMA covers fresh DBs; older DBs
+      // need the P3 tables too (SCHEMA already ran, so create here).
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS ledger (
+          seq INTEGER PRIMARY KEY, ts TEXT NOT NULL, type TEXT NOT NULL,
+          ref_id TEXT, mission_id TEXT, detail TEXT NOT NULL,
+          prev_hash TEXT NOT NULL, hash TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS approvals (
+          id TEXT PRIMARY KEY, kind TEXT NOT NULL,
+          mission_id TEXT NOT NULL REFERENCES missions(id), task_id TEXT,
+          summary TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
+          reason TEXT, created_at TEXT NOT NULL, decided_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS executor_config (
+          agent TEXT PRIMARY KEY, models TEXT NOT NULL DEFAULT '[]',
+          default_model TEXT, reasoning TEXT, updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_ledger_mission ON ledger(mission_id);
+        CREATE INDEX IF NOT EXISTS idx_approvals_status ON approvals(status);
+      `);
     }
     if (version < SCHEMA_VERSION) {
       this.db
@@ -558,6 +647,175 @@ export class Store {
     }));
   }
 
+  // -- ledger (P3) ------------------------------------------------------------
+  insertLedgerEntry(entry: LedgerRow): void {
+    this.db
+      .prepare(
+        'INSERT INTO ledger (seq, ts, type, ref_id, mission_id, detail, prev_hash, hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      )
+      .run(
+        entry.seq,
+        entry.ts,
+        entry.type,
+        entry.refId,
+        entry.missionId,
+        entry.detail,
+        entry.prevHash,
+        entry.hash,
+      );
+  }
+
+  getLastLedgerEntry(): LedgerRow | null {
+    const row = this.db.prepare('SELECT * FROM ledger ORDER BY seq DESC LIMIT 1').get() as
+      | Record<string, unknown>
+      | undefined;
+    return row ? rowToLedger(row) : null;
+  }
+
+  listLedgerEntries(missionId?: string): LedgerRow[] {
+    const rows = (
+      missionId
+        ? this.db
+            .prepare('SELECT * FROM ledger WHERE mission_id = ? ORDER BY seq ASC')
+            .all(missionId)
+        : this.db.prepare('SELECT * FROM ledger ORDER BY seq ASC').all()
+    ) as Record<string, unknown>[];
+    return rows.map(rowToLedger);
+  }
+
+  // -- approvals (P3) ---------------------------------------------------------
+  createApproval(input: {
+    kind: ApprovalKind;
+    missionId: string;
+    taskId?: string | null;
+    summary: string;
+  }): Approval {
+    const a: Approval = {
+      id: newId('ap'),
+      kind: input.kind,
+      missionId: input.missionId,
+      taskId: input.taskId ?? null,
+      summary: input.summary,
+      status: 'pending',
+      reason: null,
+      createdAt: nowIso(),
+      decidedAt: null,
+    };
+    this.db
+      .prepare(
+        'INSERT INTO approvals (id, kind, mission_id, task_id, summary, status, reason, created_at, decided_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      )
+      .run(a.id, a.kind, a.missionId, a.taskId, a.summary, a.status, a.reason, a.createdAt, a.decidedAt);
+    return a;
+  }
+
+  getApproval(id: string): Approval | null {
+    const row = this.db.prepare('SELECT * FROM approvals WHERE id = ?').get(id) as
+      | Record<string, unknown>
+      | undefined;
+    return row ? rowToApproval(row) : null;
+  }
+
+  listApprovals(status?: ApprovalStatus): Approval[] {
+    const rows = (
+      status
+        ? this.db
+            .prepare(
+              "SELECT * FROM approvals WHERE status = ? ORDER BY created_at ASC",
+            )
+            .all(status)
+        : this.db.prepare('SELECT * FROM approvals ORDER BY created_at ASC').all()
+    ) as Record<string, unknown>[];
+    return rows.map(rowToApproval);
+  }
+
+  decideApproval(
+    id: string,
+    decision: 'approved' | 'rejected',
+    reason: string | null,
+  ): Approval {
+    const cur = this.getApproval(id);
+    if (!cur) throw new Error(`approval not found: ${id}`);
+    if (cur.status !== 'pending') {
+      throw new Error(`approval ${id} is already ${cur.status}`);
+    }
+    this.db
+      .prepare('UPDATE approvals SET status = ?, reason = ?, decided_at = ? WHERE id = ?')
+      .run(decision, reason, nowIso(), id);
+    const next = this.getApproval(id);
+    if (!next) throw new Error(`approval vanished after decide: ${id}`);
+    return next;
+  }
+
+  // -- executor config (P3) ---------------------------------------------------
+  upsertExecutorConfig(
+    agent: string,
+    patch: { models?: string[]; defaultModel?: string | null; reasoning?: string | null },
+  ): ExecutorConfig {
+    const cur = this.getExecutorConfig(agent);
+    const next: ExecutorConfig = {
+      agent,
+      models: patch.models ?? cur?.models ?? [],
+      defaultModel: patch.defaultModel !== undefined ? patch.defaultModel : (cur?.defaultModel ?? null),
+      reasoning: patch.reasoning !== undefined ? patch.reasoning : (cur?.reasoning ?? null),
+      updatedAt: nowIso(),
+    };
+    this.db
+      .prepare(
+        'INSERT INTO executor_config (agent, models, default_model, reasoning, updated_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(agent) DO UPDATE SET models = excluded.models, default_model = excluded.default_model, reasoning = excluded.reasoning, updated_at = excluded.updated_at',
+      )
+      .run(agent, JSON.stringify(next.models), next.defaultModel, next.reasoning, next.updatedAt);
+    return next;
+  }
+
+  getExecutorConfig(agent: string): ExecutorConfig | null {
+    const row = this.db
+      .prepare('SELECT * FROM executor_config WHERE agent = ?')
+      .get(agent) as Record<string, unknown> | undefined;
+    if (!row) return null;
+    let models: string[] = [];
+    try {
+      const parsed: unknown = JSON.parse(String(row.models ?? '[]'));
+      if (Array.isArray(parsed)) models = parsed.filter((x): x is string => typeof x === 'string');
+    } catch {
+      models = [];
+    }
+    return {
+      agent: String(row.agent),
+      models,
+      defaultModel: row.default_model === null ? null : String(row.default_model),
+      reasoning: row.reasoning === null ? null : String(row.reasoning),
+      updatedAt: String(row.updated_at),
+    };
+  }
+
+  listExecutorConfigs(): ExecutorConfig[] {
+    const rows = this.db.prepare('SELECT * FROM executor_config ORDER BY agent ASC').all() as Record<
+      string,
+      unknown
+    >[];
+    return rows.map((row) => {
+      const cfg = this.getExecutorConfig(String(row.agent));
+      if (!cfg) throw new Error(`executor config vanished: ${String(row.agent)}`);
+      return cfg;
+    });
+  }
+
+  // -- board reads ------------------------------------------------------------
+  listAllMissions(): Mission[] {
+    const rows = this.db
+      .prepare('SELECT * FROM missions ORDER BY created_at DESC')
+      .all() as Record<string, unknown>[];
+    return rows.map(rowToMission);
+  }
+
+  listAllAttempts(): Attempt[] {
+    const rows = this.db
+      .prepare('SELECT * FROM attempts ORDER BY created_at ASC')
+      .all() as Record<string, unknown>[];
+    return rows.map(rowToAttempt);
+  }
+
   // -- worktrees -------------------------------------------------------------
   registerWorktree(input: {
     attemptId: string;
@@ -614,6 +872,33 @@ export class Store {
       .prepare('UPDATE worktrees SET status = ?, merged_commit = ? WHERE id = ?')
       .run(status, mergedCommit, id);
   }
+}
+
+function rowToLedger(r: Record<string, unknown>): LedgerRow {
+  return {
+    seq: Number(r.seq),
+    ts: String(r.ts),
+    type: String(r.type),
+    refId: r.ref_id === null ? null : String(r.ref_id),
+    missionId: r.mission_id === null ? null : String(r.mission_id),
+    detail: String(r.detail),
+    prevHash: String(r.prev_hash),
+    hash: String(r.hash),
+  };
+}
+
+function rowToApproval(r: Record<string, unknown>): Approval {
+  return {
+    id: String(r.id),
+    kind: String(r.kind) as ApprovalKind,
+    missionId: String(r.mission_id),
+    taskId: r.task_id === null ? null : String(r.task_id),
+    summary: String(r.summary),
+    status: String(r.status) as ApprovalStatus,
+    reason: r.reason === null ? null : String(r.reason),
+    createdAt: String(r.created_at),
+    decidedAt: r.decided_at === null ? null : String(r.decided_at),
+  };
 }
 
 function rowToMission(r: Record<string, unknown>): Mission {
