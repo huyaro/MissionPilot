@@ -7,13 +7,24 @@ on Linux for verification.
 
 ## Run (dev)
 
+Two mutually exclusive ways — pick one, never both at once.
+`npm run tauri dev` already starts its own Vite via `beforeDevCommand`;
+running `npm run dev` alongside it fails with "Port 1420 is already in use".
+
 ```sh
-# Terminal 1 — backend in HTTP mode (token is yours to choose):
+# Terminal 1 — backend in HTTP mode (token is yours to choose).
+# Needed for both ways below, unless you use the setup screen's
+# "Start backend" button instead:
 cd ../..
 ORCHESTRATOR_TRANSPORT=http ORCHESTRATOR_MCP_TOKEN=<token> node dist/src/server.js
 
-# Terminal 2 — frontend dev server (the app connects to 127.0.0.1:8788):
-npm run dev
+# Way 1 — the Tauri app (normal path):
+cd apps/desktop
+npm run tauri dev
+
+# Way 2 — frontend in the browser only (UI debugging, no Tauri shell):
+cd apps/desktop
+npm run dev   # then open http://localhost:1420
 ```
 
 Or start the app and let it spawn the backend itself: the setup screen's
