@@ -7,7 +7,7 @@ import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 export type MissionStatus =
   | 'created'
@@ -45,6 +45,18 @@ export interface Task {
   key: string;
   title: string;
   contract: string;
+  /** Acceptance criteria; every task must have one (planner-intake enforces). */
+  acceptance: string;
+  /** Keys of tasks this one depends on (DAG edges). */
+  dependsOn: string[];
+  /** Estimated cost in abstract units (planner-supplied); null = unestimated. */
+  estimate: number | null;
+  mode: string | null;
+  type: string | null;
+  /** How many revise attempts have been spent on this task (P1 reviser, max 2). */
+  revisionsUsed: number;
+  /** Whether the task has already been rerouted to another agent. */
+  rerouted: boolean;
   status: TaskStatus;
   createdAt: string;
   updatedAt: string;
@@ -79,6 +91,16 @@ export interface Worktree {
   baseCommit: string;
   path: string;
   status: string;
+  /** Commit the worktree was merged as (P1 merge-back); null until merged. */
+  mergedCommit: string | null;
+}
+
+export interface ReplanProposal {
+  id: string;
+  missionId: string;
+  taskId: string;
+  reason: string;
+  createdAt: string;
 }
 
 export function newId(prefix: string): string {
@@ -119,6 +141,13 @@ CREATE TABLE IF NOT EXISTS tasks (
   key TEXT NOT NULL,
   title TEXT NOT NULL,
   contract TEXT NOT NULL,
+  acceptance TEXT NOT NULL DEFAULT '',
+  depends_on TEXT NOT NULL DEFAULT '[]',
+  estimate INTEGER,
+  mode TEXT,
+  type TEXT,
+  revisions_used INTEGER NOT NULL DEFAULT 0,
+  rerouted INTEGER NOT NULL DEFAULT 0,
   status TEXT NOT NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
@@ -149,7 +178,15 @@ CREATE TABLE IF NOT EXISTS worktrees (
   repo TEXT NOT NULL,
   base_commit TEXT NOT NULL,
   path TEXT NOT NULL,
-  status TEXT NOT NULL
+  status TEXT NOT NULL,
+  merged_commit TEXT
+);
+CREATE TABLE IF NOT EXISTS replan_proposals (
+  id TEXT PRIMARY KEY,
+  mission_id TEXT NOT NULL REFERENCES missions(id),
+  task_id TEXT NOT NULL REFERENCES tasks(id),
+  reason TEXT NOT NULL,
+  created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_tasks_mission ON tasks(mission_id);
 CREATE INDEX IF NOT EXISTS idx_attempts_task ON attempts(task_id);
@@ -168,6 +205,42 @@ export class Store {
     this.db
       .prepare("INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', ?)")
       .run(String(SCHEMA_VERSION));
+    this.migrate();
+  }
+
+  /** Bring a v1 database up to the current schema (additive only). */
+  private migrate(): void {
+    const row = this.db
+      .prepare("SELECT value FROM meta WHERE key = 'schema_version'")
+      .get() as { value: string } | undefined;
+    const version = row ? Number(row.value) : 1;
+    if (version >= 2) return;
+    const taskCols = new Set(
+      (this.db.prepare('PRAGMA table_info(tasks)').all() as Array<{ name: string }>).map(
+        (c) => c.name,
+      ),
+    );
+    const addCol = (table: string, col: string, def: string): void => {
+      const cols = new Set(
+        (this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map(
+          (c) => c.name,
+        ),
+      );
+      if (!cols.has(col)) this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${def}`);
+    };
+    if (!taskCols.has('acceptance')) {
+      addCol('tasks', 'acceptance', "TEXT NOT NULL DEFAULT ''");
+      addCol('tasks', 'depends_on', "TEXT NOT NULL DEFAULT '[]'");
+      addCol('tasks', 'estimate', 'INTEGER');
+      addCol('tasks', 'mode', 'TEXT');
+      addCol('tasks', 'type', 'TEXT');
+      addCol('tasks', 'revisions_used', 'INTEGER NOT NULL DEFAULT 0');
+      addCol('tasks', 'rerouted', 'INTEGER NOT NULL DEFAULT 0');
+    }
+    addCol('worktrees', 'merged_commit', 'TEXT');
+    this.db
+      .prepare("UPDATE meta SET value = '2' WHERE key = 'schema_version'")
+      .run();
   }
 
   close(): void {
@@ -228,7 +301,17 @@ export class Store {
   }
 
   // -- tasks ----------------------------------------------------------------
-  createTask(input: { missionId: string; key: string; title: string; contract: string }): Task {
+  createTask(input: {
+    missionId: string;
+    key: string;
+    title: string;
+    contract: string;
+    acceptance?: string;
+    dependsOn?: string[];
+    estimate?: number | null;
+    mode?: string | null;
+    type?: string | null;
+  }): Task {
     const now = nowIso();
     const t: Task = {
       id: newId('t'),
@@ -236,15 +319,38 @@ export class Store {
       key: input.key,
       title: input.title,
       contract: input.contract,
+      acceptance: input.acceptance ?? '',
+      dependsOn: input.dependsOn ?? [],
+      estimate: input.estimate ?? null,
+      mode: input.mode ?? null,
+      type: input.type ?? null,
+      revisionsUsed: 0,
+      rerouted: false,
       status: 'pending',
       createdAt: now,
       updatedAt: now,
     };
     this.db
       .prepare(
-        'INSERT INTO tasks (id, mission_id, key, title, contract, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO tasks (id, mission_id, key, title, contract, acceptance, depends_on, estimate, mode, type, revisions_used, rerouted, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       )
-      .run(t.id, t.missionId, t.key, t.title, t.contract, t.status, t.createdAt, t.updatedAt);
+      .run(
+        t.id,
+        t.missionId,
+        t.key,
+        t.title,
+        t.contract,
+        t.acceptance,
+        JSON.stringify(t.dependsOn),
+        t.estimate,
+        t.mode,
+        t.type,
+        t.revisionsUsed ? 1 : 0,
+        t.rerouted ? 1 : 0,
+        t.status,
+        t.createdAt,
+        t.updatedAt,
+      );
     return t;
   }
 
@@ -255,10 +361,61 @@ export class Store {
     return row ? rowToTask(row) : null;
   }
 
+  listTasksByMission(missionId: string): Task[] {
+    const rows = this.db
+      .prepare('SELECT * FROM tasks WHERE mission_id = ? ORDER BY created_at ASC')
+      .all(missionId) as Record<string, unknown>[];
+    return rows.map(rowToTask);
+  }
+
   updateTaskStatus(id: string, status: TaskStatus): void {
     this.db
       .prepare('UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?')
       .run(status, nowIso(), id);
+  }
+
+  updateTaskFields(
+    id: string,
+    patch: Partial<Pick<Task, 'revisionsUsed' | 'rerouted' | 'status'>>,
+  ): void {
+    const cur = this.getTask(id);
+    if (!cur) throw new Error(`task not found: ${id}`);
+    const next: Task = { ...cur, ...patch, updatedAt: nowIso() };
+    this.db
+      .prepare(
+        'UPDATE tasks SET revisions_used = ?, rerouted = ?, status = ?, updated_at = ? WHERE id = ?',
+      )
+      .run(next.revisionsUsed, next.rerouted ? 1 : 0, next.status, next.updatedAt, id);
+  }
+
+  // -- replan proposals -------------------------------------------------------
+  createReplanProposal(input: { missionId: string; taskId: string; reason: string }): ReplanProposal {
+    const p: ReplanProposal = {
+      id: newId('rp'),
+      missionId: input.missionId,
+      taskId: input.taskId,
+      reason: input.reason,
+      createdAt: nowIso(),
+    };
+    this.db
+      .prepare(
+        'INSERT INTO replan_proposals (id, mission_id, task_id, reason, created_at) VALUES (?, ?, ?, ?, ?)',
+      )
+      .run(p.id, p.missionId, p.taskId, p.reason, p.createdAt);
+    return p;
+  }
+
+  listReplanProposals(missionId: string): ReplanProposal[] {
+    const rows = this.db
+      .prepare('SELECT * FROM replan_proposals WHERE mission_id = ? ORDER BY created_at ASC')
+      .all(missionId) as Record<string, unknown>[];
+    return rows.map((r) => ({
+      id: String(r.id),
+      missionId: String(r.mission_id),
+      taskId: String(r.task_id),
+      reason: String(r.reason),
+      createdAt: String(r.created_at),
+    }));
   }
 
   // -- attempts -------------------------------------------------------------
@@ -389,6 +546,7 @@ export class Store {
       baseCommit: input.baseCommit,
       path: input.path,
       status: 'active',
+      mergedCommit: null,
     };
     this.db
       .prepare(
@@ -410,7 +568,25 @@ export class Store {
       baseCommit: String(row.base_commit),
       path: String(row.path),
       status: String(row.status),
+      mergedCommit: row.merged_commit === null ? null : String(row.merged_commit),
     };
+  }
+
+  updateWorktree(id: string, patch: Partial<Pick<Worktree, 'status' | 'mergedCommit'>>): void {
+    const row = this.db.prepare('SELECT * FROM worktrees WHERE id = ?').get(id) as
+      | Record<string, unknown>
+      | undefined;
+    if (!row) throw new Error(`worktree not found: ${id}`);
+    const status = patch.status ?? String(row.status);
+    const mergedCommit =
+      patch.mergedCommit !== undefined
+        ? patch.mergedCommit
+        : row.merged_commit === null
+          ? null
+          : String(row.merged_commit);
+    this.db
+      .prepare('UPDATE worktrees SET status = ?, merged_commit = ? WHERE id = ?')
+      .run(status, mergedCommit, id);
   }
 }
 
@@ -428,12 +604,26 @@ function rowToMission(r: Record<string, unknown>): Mission {
 }
 
 function rowToTask(r: Record<string, unknown>): Task {
+  let dependsOn: string[] = [];
+  try {
+    const parsed: unknown = JSON.parse(String(r.depends_on ?? '[]'));
+    if (Array.isArray(parsed)) dependsOn = parsed.filter((x): x is string => typeof x === 'string');
+  } catch {
+    dependsOn = [];
+  }
   return {
     id: String(r.id),
     missionId: String(r.mission_id),
     key: String(r.key),
     title: String(r.title),
     contract: String(r.contract),
+    acceptance: String(r.acceptance ?? ''),
+    dependsOn,
+    estimate: r.estimate === null || r.estimate === undefined ? null : Number(r.estimate),
+    mode: r.mode === null || r.mode === undefined ? null : String(r.mode),
+    type: r.type === null || r.type === undefined ? null : String(r.type),
+    revisionsUsed: Number(r.revisions_used ?? 0),
+    rerouted: Number(r.rerouted ?? 0) === 1,
     status: String(r.status) as TaskStatus,
     createdAt: String(r.created_at),
     updatedAt: String(r.updated_at),
