@@ -45,7 +45,7 @@ jobs:
       # launch is what needs verifying, and bundling costs minutes.
       - name: Build Tauri app (debug)
         working-directory: apps/desktop/src-tauri
-        run: cargo build
+        run: cargo build --features tauri/custom-protocol
 
       - name: Launch app and wait for backend health
         run: |
