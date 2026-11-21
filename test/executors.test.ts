@@ -1,16 +1,21 @@
 // Executor detection + model listing tests — Qoder --list-models parsing,
-// CodeBuddy models.json parsing, detection/added flags, failure modes.
+// CodeBuddy live list + models.json fallback, Pi list + models.json
+// fallback, detection/added flags, failure modes.
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Store } from '../src/store.js';
 import {
+  clearDetectionCache,
   listExecutorModels,
   listExecutors,
   parseCodebuddyModelsFile,
+  parsePiModelsFile,
   parseQoderModels,
+  resolveExecutorBin,
+  whichViaLoginShell,
 } from '../src/executors.js';
 
 const fakeQoderModels = join(process.cwd(), 'scripts', 'fake-qoder-models.mjs');
@@ -73,6 +78,46 @@ describe('parseCodebuddyModelsFile', () => {
   });
 });
 
+describe('parsePiModelsFile', () => {
+  it('reads providers.<provider>.models[]', () => {
+    const text = JSON.stringify({
+      providers: {
+        openai: { models: [{ id: 'gpt-5' }, { id: 'gpt-5-mini' }] },
+        anthropic: { models: [{ id: 'claude-opus' }] },
+      },
+    });
+    assert.deepEqual(parsePiModelsFile(text), ['gpt-5', 'gpt-5-mini', 'claude-opus']);
+  });
+
+  it('accepts top-level models[] and availableModels', () => {
+    assert.deepEqual(
+      parsePiModelsFile(JSON.stringify({ models: [{ id: 'a' }, { id: 'b' }] })),
+      ['a', 'b'],
+    );
+    assert.deepEqual(
+      parsePiModelsFile(JSON.stringify({ availableModels: ['x'], models: [{ id: 'y' }] })),
+      ['x'],
+    );
+  });
+
+  it('throws on invalid JSON; a wrong shape yields no models', () => {
+    assert.throws(() => parsePiModelsFile('{not json'), /有效的 JSON/);
+    assert.deepEqual(parsePiModelsFile('[]'), []);
+    assert.deepEqual(parsePiModelsFile('{}'), []);
+  });
+});
+
+describe('whichViaLoginShell', () => {
+  it('resolves a real binary through a login shell', async () => {
+    const path = await whichViaLoginShell('node');
+    assert.ok(path && path.endsWith('node'));
+  });
+
+  it('returns null for a nonexistent binary', async () => {
+    assert.equal(await whichViaLoginShell('definitely-not-a-real-bin-xyz'), null);
+  });
+});
+
 describe('listExecutorModels', () => {
   it('lists qoder models from `qoder --list-models`', async () => {
     const prev = process.env.ORCHESTRATOR_QODER_BIN;
@@ -88,9 +133,20 @@ describe('listExecutorModels', () => {
   });
 
   it('fails clearly when the qoder binary cannot be spawned', async () => {
+    // A binary that detection finds (answers --version) but that fails
+    // on --list-models.
+    const dir = mkdtempSync(join(tmpdir(), 'orch-qoder-fail-'));
+    const fakeBin = join(dir, 'qoder');
+    writeFileSync(
+      fakeBin,
+      '#!/usr/bin/env node\nif (process.argv.includes("--version")) { process.stdout.write("qoder 1.0\\n"); process.exit(0); }\nprocess.stderr.write("boom\\n");\nprocess.exit(1);\n',
+      'utf8',
+    );
+    chmodSync(fakeBin, 0o755);
     const prev = process.env.ORCHESTRATOR_QODER_BIN;
-    process.env.ORCHESTRATOR_QODER_BIN = '/nonexistent/qoder';
+    process.env.ORCHESTRATOR_QODER_BIN = fakeBin;
     try {
+      clearDetectionCache();
       await assert.rejects(() => listExecutorModels('qoder'), /无法获取 Qoder 模型列表/);
     } finally {
       if (prev === undefined) delete process.env.ORCHESTRATOR_QODER_BIN;
@@ -98,7 +154,7 @@ describe('listExecutorModels', () => {
     }
   });
 
-  it('lists codebuddy models from models.json', async () => {
+  it('lists codebuddy models from models.json (custom models only)', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'orch-cb-models-'));
     const path = join(dir, 'models.json');
     writeFileSync(
@@ -114,15 +170,67 @@ describe('listExecutorModels', () => {
     assert.equal(result.source, '~/.codebuddy/models.json');
   });
 
-  it('fails clearly when the codebuddy models file is missing', async () => {
+  it('fails clearly when the codebuddy models file is missing, pointing at /model', async () => {
     await assert.rejects(
       () => listExecutorModels('codebuddy', { codebuddyModelsPath: '/nonexistent/models.json' }),
-      /未找到 CodeBuddy 模型配置文件/,
+      /未找到.*models\.json.*\/model 查看/,
     );
   });
 
-  it('rejects executors without a model-list mechanism', async () => {
-    await assert.rejects(() => listExecutorModels('gemini'), /不支持获取模型列表/);
+  it('fails clearly when models.json holds no models, pointing at /model', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'orch-cb-models-'));
+    const path = join(dir, 'models.json');
+    writeFileSync(path, JSON.stringify({ models: [] }), 'utf8');
+    await assert.rejects(
+      () => listExecutorModels('codebuddy', { codebuddyModelsPath: path }),
+      /没有可用模型.*\/model 查看/,
+    );
+  });
+
+  it('lists pi models from `pi --list-models`, falling back to models.json', async () => {
+    // A fake pi that fails --list-models, plus a providers-shaped file.
+    const dir = mkdtempSync(join(tmpdir(), 'orch-pi-models-'));
+    const fakePi = join(dir, 'pi');
+    writeFileSync(
+      fakePi,
+      '#!/usr/bin/env node\nif (process.argv.includes("--version")) { process.stdout.write("pi 1.0\\n"); process.exit(0); }\nprocess.exit(1);\n',
+      'utf8',
+    );
+    chmodSync(fakePi, 0o755);
+    const modelsPath = join(dir, 'models.json');
+    writeFileSync(
+      modelsPath,
+      JSON.stringify({ providers: { openai: { models: [{ id: 'gpt-5' }] } } }),
+      'utf8',
+    );
+    const prevBin = process.env.ORCHESTRATOR_PI_BIN;
+    process.env.ORCHESTRATOR_PI_BIN = fakePi;
+    try {
+      clearDetectionCache();
+      const result = await listExecutorModels('pi', { piModelsPath: modelsPath });
+      assert.deepEqual(result.models, ['gpt-5']);
+      assert.equal(result.source, '~/.pi/agent/models.json');
+    } finally {
+      if (prevBin === undefined) delete process.env.ORCHESTRATOR_PI_BIN;
+      else process.env.ORCHESTRATOR_PI_BIN = prevBin;
+    }
+  });
+
+  it('lists pi models from `pi --list-models` when it works', async () => {
+    const prevBin = process.env.ORCHESTRATOR_PI_BIN;
+    process.env.ORCHESTRATOR_PI_BIN = fakeQoderModels;
+    try {
+      clearDetectionCache();
+      const result = await listExecutorModels('pi');
+      assert.deepEqual(result.models, ['Qwen3.8-Max', 'DeepSeek-V4-Flash', 'auto']);
+      assert.match(result.source, /--list-models/);
+    } finally {
+      if (prevBin === undefined) delete process.env.ORCHESTRATOR_PI_BIN;
+      else process.env.ORCHESTRATOR_PI_BIN = prevBin;
+    }
+  });
+
+  it('rejects unknown executors', async () => {
     await assert.rejects(() => listExecutorModels('nope'), /unknown executor/);
   });
 });
@@ -131,20 +239,31 @@ describe('listExecutors', () => {
   it('marks detection and added state from binary presence and saved config', async () => {
     const prevCb = process.env.ORCHESTRATOR_CODEBUDDY_BIN;
     const prevQ = process.env.ORCHESTRATOR_QODER_BIN;
+    const prevPi = process.env.ORCHESTRATOR_PI_BIN;
     process.env.ORCHESTRATOR_CODEBUDDY_BIN = '/nonexistent/codebuddy';
     process.env.ORCHESTRATOR_QODER_BIN = '/nonexistent/qoder';
+    process.env.ORCHESTRATOR_PI_BIN = '/nonexistent/pi';
     try {
+      clearDetectionCache();
       const dataDir = mkdtempSync(join(tmpdir(), 'orch-exec-'));
       const store = new Store(join(dataDir, 'db.sqlite'));
       try {
         let list = await listExecutors(store);
+        assert.deepEqual(
+          list.map((e) => e.id),
+          ['codebuddy', 'qoder', 'pi'],
+        );
         const byId = new Map(list.map((e) => [e.id, e]));
         assert.equal(byId.get('codebuddy')?.detected, false);
         assert.equal(byId.get('codebuddy')?.state, 'missing');
         assert.equal(byId.get('codebuddy')?.added, false);
-        assert.equal(byId.get('workbuddy')?.state, 'pending');
-        assert.equal(byId.get('gemini')?.state, 'not-connected');
-        store.upsertExecutorConfig('codebuddy', { models: ['hy3'], defaultModel: 'hy3' });
+        assert.match(byId.get('codebuddy')?.reason ?? '', /PATH 中没有.*codebuddy/);
+        assert.equal(byId.get('pi')?.detected, false);
+        assert.match(byId.get('pi')?.reason ?? '', /\.pi\/agent/);
+        store.upsertExecutorConfig('codebuddy', {
+          models: [{ id: 'hy3', reasoning: 'high', context: '128K' }],
+          defaultModel: 'hy3',
+        });
         list = await listExecutors(store);
         assert.equal(list.find((e) => e.id === 'codebuddy')?.added, true);
         assert.equal(list.find((e) => e.id === 'codebuddy')?.config?.defaultModel, 'hy3');
@@ -160,6 +279,104 @@ describe('listExecutors', () => {
       else process.env.ORCHESTRATOR_CODEBUDDY_BIN = prevCb;
       if (prevQ === undefined) delete process.env.ORCHESTRATOR_QODER_BIN;
       else process.env.ORCHESTRATOR_QODER_BIN = prevQ;
+      if (prevPi === undefined) delete process.env.ORCHESTRATOR_PI_BIN;
+      else process.env.ORCHESTRATOR_PI_BIN = prevPi;
+    }
+  });
+
+  it('detects pi from its config dir when no binary is on PATH', async () => {
+    const prevCb = process.env.ORCHESTRATOR_CODEBUDDY_BIN;
+    const prevQ = process.env.ORCHESTRATOR_QODER_BIN;
+    const prevPi = process.env.ORCHESTRATOR_PI_BIN;
+    process.env.ORCHESTRATOR_CODEBUDDY_BIN = '/nonexistent/codebuddy';
+    process.env.ORCHESTRATOR_QODER_BIN = '/nonexistent/qoder';
+    process.env.ORCHESTRATOR_PI_BIN = '/nonexistent/pi';
+    try {
+      clearDetectionCache();
+      const home = mkdtempSync(join(tmpdir(), 'orch-home-'));
+      mkdirSync(join(home, '.pi', 'agent'), { recursive: true });
+      const store = new Store(join(mkdtempSync(join(tmpdir(), 'orch-exec-')), 'db.sqlite'));
+      try {
+        const list = await listExecutors(store, { homeDir: home });
+        const pi = list.find((e) => e.id === 'pi');
+        assert.equal(pi?.detected, true);
+        assert.deepEqual(pi?.signal, { kind: 'config', value: '~/.pi/agent' });
+        // Detected agents sort first.
+        assert.equal(list[0]?.id, 'pi');
+      } finally {
+        store.close();
+      }
+    } finally {
+      if (prevCb === undefined) delete process.env.ORCHESTRATOR_CODEBUDDY_BIN;
+      else process.env.ORCHESTRATOR_CODEBUDDY_BIN = prevCb;
+      if (prevQ === undefined) delete process.env.ORCHESTRATOR_QODER_BIN;
+      else process.env.ORCHESTRATOR_QODER_BIN = prevQ;
+      if (prevPi === undefined) delete process.env.ORCHESTRATOR_PI_BIN;
+      else process.env.ORCHESTRATOR_PI_BIN = prevPi;
+    }
+  });
+
+  it('reports the binary path, signal and --version', async () => {
+    // A temp script that answers --version (detection probes it).
+    const dir = mkdtempSync(join(tmpdir(), 'orch-cb-bin-'));
+    const fakeBin = join(dir, 'codebuddy');
+    writeFileSync(
+      fakeBin,
+      '#!/usr/bin/env node\nif (process.argv.includes("--version")) { process.stdout.write("codebuddy 9.9.9\\n"); process.exit(0); }\nprocess.exit(0);\n',
+      'utf8',
+    );
+    chmodSync(fakeBin, 0o755);
+    const prevCb = process.env.ORCHESTRATOR_CODEBUDDY_BIN;
+    const prevQ = process.env.ORCHESTRATOR_QODER_BIN;
+    const prevPi = process.env.ORCHESTRATOR_PI_BIN;
+    process.env.ORCHESTRATOR_CODEBUDDY_BIN = fakeBin;
+    process.env.ORCHESTRATOR_QODER_BIN = '/nonexistent/qoder';
+    process.env.ORCHESTRATOR_PI_BIN = '/nonexistent/pi';
+    try {
+      clearDetectionCache();
+      const store = new Store(join(mkdtempSync(join(tmpdir(), 'orch-exec-')), 'db.sqlite'));
+      try {
+        const list = await listExecutors(store);
+        const cb = list.find((e) => e.id === 'codebuddy');
+        assert.equal(cb?.detected, true);
+        assert.equal(cb?.signal?.kind, 'binary');
+        assert.equal(cb?.signal?.value, fakeBin);
+        assert.equal(cb?.version, 'codebuddy 9.9.9');
+      } finally {
+        store.close();
+      }
+    } finally {
+      if (prevCb === undefined) delete process.env.ORCHESTRATOR_CODEBUDDY_BIN;
+      else process.env.ORCHESTRATOR_CODEBUDDY_BIN = prevCb;
+      if (prevQ === undefined) delete process.env.ORCHESTRATOR_QODER_BIN;
+      else process.env.ORCHESTRATOR_QODER_BIN = prevQ;
+      if (prevPi === undefined) delete process.env.ORCHESTRATOR_PI_BIN;
+      else process.env.ORCHESTRATOR_PI_BIN = prevPi;
+    }
+  });
+
+  it('prefers qoder over qodercli, with qodercli as fallback', async () => {
+    const prevQ = process.env.ORCHESTRATOR_QODER_BIN;
+    const prevPath = process.env.PATH;
+    delete process.env.ORCHESTRATOR_QODER_BIN;
+    const dir = mkdtempSync(join(tmpdir(), 'orch-qoder-bin-'));
+    const qodercli = join(dir, 'qodercli');
+    writeFileSync(qodercli, '#!/usr/bin/env node\nprocess.stdout.write("qodercli 1.0\\n");\n', 'utf8');
+    chmodSync(qodercli, 0o755);
+    try {
+      clearDetectionCache();
+      process.env.PATH = `${dir}:${prevPath ?? ''}`;
+      assert.equal(await resolveExecutorBin('qoder'), qodercli);
+      const qoder = join(dir, 'qoder');
+      writeFileSync(qoder, '#!/usr/bin/env node\nprocess.stdout.write("qoder 1.0\\n");\n', 'utf8');
+      chmodSync(qoder, 0o755);
+      clearDetectionCache();
+      assert.equal(await resolveExecutorBin('qoder'), qoder);
+    } finally {
+      if (prevQ === undefined) delete process.env.ORCHESTRATOR_QODER_BIN;
+      else process.env.ORCHESTRATOR_QODER_BIN = prevQ;
+      if (prevPath === undefined) delete process.env.PATH;
+      else process.env.PATH = prevPath;
     }
   });
 });

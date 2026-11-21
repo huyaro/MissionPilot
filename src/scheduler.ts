@@ -28,9 +28,14 @@ export interface SchedulerOptions {
   attemptTimeoutMs?: number;
 }
 
-/** First attempt of a task always goes to codebuddy (the P0 executor);
- * reroute goes to the other agent. No scoreboard yet (P3). */
-const DEFAULT_AGENT = 'codebuddy';
+/**
+ * First attempt of a task prefers codebuddy (the P0 executor), then qoder.
+ * The dispatcher only picks an agent that has at least one configured
+ * model (see dispatcher.pickAgent) — an unconfigured agent is never a
+ * candidate, and the task fails with a clear ledger reason instead of
+ * silently stalling.
+ */
+const PREFERRED_AGENTS = ['codebuddy', 'qoder'];
 
 export class Scheduler {
   private store: Store;
@@ -119,9 +124,24 @@ export class Scheduler {
         if (!this.depsDone(task, freshByKey)) continue;
         this.store.updateTaskStatus(task.id, 'ready');
         this.store.updateTaskStatus(task.id, 'leased');
+        const agent = this.dispatcher.pickAgent(PREFERRED_AGENTS);
+        if (!agent) {
+          // Fail-closed: no executor has a configured model, so nothing
+          // may run. Failing (with a ledger reason) beats a silent stall.
+          this.store.updateTaskStatus(task.id, 'failed');
+          appendLedger(
+            this.store,
+            'task_failed',
+            task.id,
+            mission.id,
+            'no executor has configured models — add models in Settings',
+          );
+          log('error', 'no dispatchable executor', { missionId: mission.id, task: task.key });
+          continue;
+        }
         await this.dispatcher.dispatchExistingTask(
           task,
-          DEFAULT_AGENT,
+          agent,
           mission.repo,
           task.prompt,
           task.contract,
@@ -192,20 +212,31 @@ export class Scheduler {
       return;
     }
     const decision = decideNextAction(task, attempt, verify);
-    if (decision.action === 'revise') {
-      this.store.updateTaskFields(task.id, { revisionsUsed: task.revisionsUsed + 1 });
+    if (decision.action === 'revise' || decision.action === 'reroute') {
+      const agent = this.dispatcher.pickAgent([decision.agent]);
+      if (!agent) {
+        // The decided agent has no configured model — it cannot run.
+        // Fail the task with a clear reason instead of dispatching to
+        // a model outside the user's configured range.
+        this.store.updateTaskStatus(task.id, 'failed');
+        appendLedger(
+          this.store,
+          'task_failed',
+          task.id,
+          mission.id,
+          `${decision.agent} has no configured models — add models in Settings`,
+        );
+        log('error', 'decided agent is not dispatchable', { task: task.key, agent: decision.agent });
+        return;
+      }
+      if (decision.action === 'revise') {
+        this.store.updateTaskFields(task.id, { revisionsUsed: task.revisionsUsed + 1 });
+      } else {
+        this.store.updateTaskFields(task.id, { rerouted: true });
+      }
       await this.dispatcher.dispatchExistingTask(
         task,
-        decision.agent,
-        mission.repo,
-        decision.prompt,
-        task.contract,
-      );
-    } else if (decision.action === 'reroute') {
-      this.store.updateTaskFields(task.id, { rerouted: true });
-      await this.dispatcher.dispatchExistingTask(
-        task,
-        decision.agent,
+        agent,
         mission.repo,
         decision.prompt,
         task.contract,

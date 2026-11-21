@@ -13,6 +13,7 @@ export type LedgerEntryType =
   | 'attempt_merged'
   | 'mission_done'
   | 'mission_failed'
+  | 'task_failed'
   | 'approval_created'
   | 'approval_decided'
   | 'mission_created';

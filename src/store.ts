@@ -7,7 +7,7 @@ import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 export type MissionStatus =
   | 'created'
@@ -136,13 +136,69 @@ export interface Approval {
   decidedAt: string | null;
 }
 
-/** P3 executor display config (models / reasoning level), set from the board. */
+export type ReasoningLevel = 'low' | 'medium' | 'high';
+
+/** One configured model with its per-model dispatch settings. */
+export interface ConfigModel {
+  id: string;
+  reasoning: ReasoningLevel;
+  /** Context size label from CONTEXT_OPTIONS in executors.ts (e.g. '128K'). */
+  context: string;
+}
+
+/**
+ * P3 executor config, set from the board. The models array IS the enabled
+ * set: a model not in the array is never used for dispatch. defaultModel
+ * must be one of the array entries; when the default is deleted it falls
+ * back to the first model in the array.
+ */
 export interface ExecutorConfig {
   agent: string;
-  models: string[];
+  models: ConfigModel[];
   defaultModel: string | null;
-  reasoning: string | null;
   updatedAt: string;
+}
+
+/** Normalize a stored models value into ConfigModel[] (v4 rows stored string[]). */
+export function migrateExecutorModels(raw: unknown, fallbackReasoning: string): ConfigModel[] {
+  let parsed: unknown = raw;
+  if (typeof raw === 'string') {
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return [];
+    }
+  }
+  if (!Array.isArray(parsed)) return [];
+  const reasoning: ReasoningLevel =
+    fallbackReasoning === 'low' || fallbackReasoning === 'medium' || fallbackReasoning === 'high'
+      ? fallbackReasoning
+      : 'high';
+  const out: ConfigModel[] = [];
+  for (const entry of parsed) {
+    if (typeof entry === 'string') {
+      if (entry.trim() !== '') out.push({ id: entry, reasoning, context: '128K' });
+      continue;
+    }
+    if (typeof entry === 'object' && entry !== null) {
+      const rec = entry as Record<string, unknown>;
+      const id = typeof rec.id === 'string' ? rec.id : '';
+      if (id.trim() === '') continue;
+      const r = rec.reasoning;
+      out.push({
+        id,
+        reasoning: r === 'low' || r === 'medium' || r === 'high' ? r : 'high',
+        context: typeof rec.context === 'string' && rec.context !== '' ? rec.context : '128K',
+      });
+    }
+  }
+  return out;
+}
+
+/** defaultModel must be in the list; otherwise the first model, else null. */
+export function normalizeDefaultModel(models: ConfigModel[], defaultModel: string | null): string | null {
+  if (defaultModel !== null && models.some((m) => m.id === defaultModel)) return defaultModel;
+  return models[0]?.id ?? null;
 }
 
 export function newId(prefix: string): string {
@@ -258,7 +314,6 @@ CREATE TABLE IF NOT EXISTS executor_config (
   agent TEXT PRIMARY KEY,
   models TEXT NOT NULL DEFAULT '[]',
   default_model TEXT,
-  reasoning TEXT,
   updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_tasks_mission ON tasks(mission_id);
@@ -329,11 +384,43 @@ export class Store {
         );
         CREATE TABLE IF NOT EXISTS executor_config (
           agent TEXT PRIMARY KEY, models TEXT NOT NULL DEFAULT '[]',
-          default_model TEXT, reasoning TEXT, updated_at TEXT NOT NULL
+          default_model TEXT, updated_at TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_ledger_mission ON ledger(mission_id);
         CREATE INDEX IF NOT EXISTS idx_approvals_status ON approvals(status);
       `);
+    }
+    if (version < 5) {
+      // Per-model config: executor_config.models goes from string[] to
+      // [{id, reasoning, context}]; the old top-level reasoning column is
+      // folded into each model and then dropped.
+      const cols = new Set(
+        (this.db.prepare('PRAGMA table_info(executor_config)').all() as Array<{ name: string }>).map(
+          (c) => c.name,
+        ),
+      );
+      if (cols.has('agent')) {
+        const selectCols = ['agent', 'models', 'default_model'];
+        if (cols.has('reasoning')) selectCols.push('reasoning');
+        const rows = this.db
+          .prepare(`SELECT ${selectCols.join(', ')} FROM executor_config`)
+          .all() as Record<string, unknown>[];
+        for (const row of rows) {
+          const reasoning =
+            typeof row.reasoning === 'string' ? row.reasoning : 'high';
+          const models = migrateExecutorModels(row.models, reasoning);
+          const defaultModel = normalizeDefaultModel(
+            models,
+            row.default_model === null ? null : String(row.default_model),
+          );
+          this.db
+            .prepare('UPDATE executor_config SET models = ?, default_model = ? WHERE agent = ?')
+            .run(JSON.stringify(models), defaultModel, String(row.agent));
+        }
+      }
+      if (cols.has('reasoning')) {
+        this.db.exec('ALTER TABLE executor_config DROP COLUMN reasoning');
+      }
     }
     if (version < SCHEMA_VERSION) {
       this.db
@@ -750,21 +837,21 @@ export class Store {
   // -- executor config (P3) ---------------------------------------------------
   upsertExecutorConfig(
     agent: string,
-    patch: { models?: string[]; defaultModel?: string | null; reasoning?: string | null },
+    patch: { models?: ConfigModel[]; defaultModel?: string | null },
   ): ExecutorConfig {
     const cur = this.getExecutorConfig(agent);
-    const next: ExecutorConfig = {
-      agent,
-      models: patch.models ?? cur?.models ?? [],
-      defaultModel: patch.defaultModel !== undefined ? patch.defaultModel : (cur?.defaultModel ?? null),
-      reasoning: patch.reasoning !== undefined ? patch.reasoning : (cur?.reasoning ?? null),
-      updatedAt: nowIso(),
-    };
+    const models = patch.models ?? cur?.models ?? [];
+    let defaultModel =
+      patch.defaultModel !== undefined ? patch.defaultModel : (cur?.defaultModel ?? null);
+    // The default must be in the list; if it was deleted, fall back to the
+    // first model (or null when the list is empty).
+    defaultModel = normalizeDefaultModel(models, defaultModel);
+    const next: ExecutorConfig = { agent, models, defaultModel, updatedAt: nowIso() };
     this.db
       .prepare(
-        'INSERT INTO executor_config (agent, models, default_model, reasoning, updated_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(agent) DO UPDATE SET models = excluded.models, default_model = excluded.default_model, reasoning = excluded.reasoning, updated_at = excluded.updated_at',
+        'INSERT INTO executor_config (agent, models, default_model, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(agent) DO UPDATE SET models = excluded.models, default_model = excluded.default_model, updated_at = excluded.updated_at',
       )
-      .run(agent, JSON.stringify(next.models), next.defaultModel, next.reasoning, next.updatedAt);
+      .run(agent, JSON.stringify(next.models), next.defaultModel, next.updatedAt);
     return next;
   }
 
@@ -779,18 +866,15 @@ export class Store {
       .prepare('SELECT * FROM executor_config WHERE agent = ?')
       .get(agent) as Record<string, unknown> | undefined;
     if (!row) return null;
-    let models: string[] = [];
-    try {
-      const parsed: unknown = JSON.parse(String(row.models ?? '[]'));
-      if (Array.isArray(parsed)) models = parsed.filter((x): x is string => typeof x === 'string');
-    } catch {
-      models = [];
-    }
+    // Read-time migration for any v4 row the <5 step did not rewrite.
+    const models = migrateExecutorModels(row.models, 'high');
     return {
       agent: String(row.agent),
       models,
-      defaultModel: row.default_model === null ? null : String(row.default_model),
-      reasoning: row.reasoning === null ? null : String(row.reasoning),
+      defaultModel: normalizeDefaultModel(
+        models,
+        row.default_model === null ? null : String(row.default_model),
+      ),
       updatedAt: String(row.updated_at),
     };
   }

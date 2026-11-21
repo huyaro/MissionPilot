@@ -9,6 +9,7 @@ import { mkdtempSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { makeTempGitRepo, git } from './helpers.js';
+import { Store, resolveDbPath } from '../src/store.js';
 
 const serverJs = join(process.cwd(), 'dist', 'src', 'server.js');
 const fakeBin = join(process.cwd(), 'scripts', 'fake-executor.mjs');
@@ -86,9 +87,28 @@ async function callTool(
 }
 
 describe('MCP server over stdio', () => {
+  // Dispatch is fail-closed: the server's store needs configured models
+  // before it will dispatch. Pre-create the DB so the spawn finds them.
+  function seedExecutorConfig(dataDir: string): void {
+    const store = new Store(resolveDbPath(dataDir));
+    try {
+      store.upsertExecutorConfig('codebuddy', {
+        models: [{ id: 'hy3', reasoning: 'high', context: '128K' }],
+        defaultModel: 'hy3',
+      });
+      store.upsertExecutorConfig('qoder', {
+        models: [{ id: 'auto', reasoning: 'high', context: '128K' }],
+        defaultModel: 'auto',
+      });
+    } finally {
+      store.close();
+    }
+  }
+
   it('initialize -> tools/list -> dispatch_task -> get_attempt to done', async () => {
     chmodSync(fakeBin, 0o755);
     const dataDir = mkdtempSync(join(tmpdir(), 'orch-mcp-'));
+    seedExecutorConfig(dataDir);
     const repo = await makeTempGitRepo();
     const proc = spawn(process.execPath, [serverJs], {
       env: {
@@ -164,6 +184,7 @@ describe('MCP server over stdio', () => {
   it('P1 flow over MCP: create_mission -> submit_plan -> get_mission to done', async () => {
     chmodSync(fakeBin, 0o755);
     const dataDir = mkdtempSync(join(tmpdir(), 'orch-mcp-'));
+    seedExecutorConfig(dataDir);
     const repo = await makeTempGitRepo();
     const proc = spawn(process.execPath, [serverJs], {
       env: {

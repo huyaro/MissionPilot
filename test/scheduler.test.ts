@@ -31,6 +31,15 @@ function setup(opts: { timeoutMs?: number } = {}): {
     ['qoder', qoderAdapter],
   ]);
   const dispatcher = new Dispatcher(store, adapters, dataDir, { finalizeTasks: false });
+  // Dispatch is fail-closed: each agent needs at least one configured model.
+  store.upsertExecutorConfig('codebuddy', {
+    models: [{ id: 'hy3', reasoning: 'high', context: '128K' }],
+    defaultModel: 'hy3',
+  });
+  store.upsertExecutorConfig('qoder', {
+    models: [{ id: 'auto', reasoning: 'high', context: '128K' }],
+    defaultModel: 'auto',
+  });
   const verifier = new Verifier(store, adapters, 30_000);
   const scheduler = new Scheduler(store, dispatcher, verifier, {
     concurrencyPerMission: 2,
@@ -183,6 +192,49 @@ describe('scheduler', () => {
       const terminal = await waitForTerminal(store, attempt.id, 10_000);
       assert.equal(terminal.status, 'failed');
       assert.equal(terminal.exitCode, null); // killed, not exited
+    } finally {
+      store.close();
+    }
+  });
+
+  it('dispatches the first attempt to qoder when only qoder has configured models', async () => {
+    process.env.FAKE_MODE = 'success';
+    const { store, scheduler } = setup();
+    store.deleteExecutorConfig('codebuddy');
+    const repo = await makeTempGitRepo();
+    try {
+      const mission = createMission(store, { goal: 'qoder only', repo });
+      submitPlan(store, { mission_id: mission.id, tasks: [planAB[0]] });
+      const status = await tickUntil(scheduler, store, mission.id, (s) => s === 'done');
+      assert.equal(status, 'done');
+      const task = store.listTasksByMission(mission.id)[0];
+      const attempts = store.listAttemptsByTask(task.id);
+      assert.equal(attempts.length, 1);
+      assert.equal(attempts[0]?.agent, 'qoder');
+    } finally {
+      store.close();
+    }
+  });
+
+  it('fails the task with a ledger reason when no executor has configured models', async () => {
+    process.env.FAKE_MODE = 'success';
+    const { store, scheduler } = setup();
+    store.deleteExecutorConfig('codebuddy');
+    store.deleteExecutorConfig('qoder');
+    const repo = await makeTempGitRepo();
+    try {
+      const mission = createMission(store, { goal: 'nothing configured', repo });
+      submitPlan(store, { mission_id: mission.id, tasks: [planAB[0]] });
+      const status = await tickUntil(scheduler, store, mission.id, (s) => s === 'failed');
+      assert.equal(status, 'failed');
+      const task = store.listTasksByMission(mission.id)[0];
+      assert.equal(task.status, 'failed');
+      assert.equal(store.listAttemptsByTask(task.id).length, 0);
+      const failed = store
+        .listLedgerEntries(mission.id)
+        .find((e) => e.type === 'task_failed');
+      assert.ok(failed);
+      assert.match(failed.detail, /no executor has configured models/);
     } finally {
       store.close();
     }

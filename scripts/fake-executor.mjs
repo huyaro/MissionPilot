@@ -16,13 +16,19 @@
 //                      (the verifier must reject a reviewer that writes)
 // Reviewer runs are detected by the prompt ("code reviewer"); maker runs
 // never emit verdicts.
-import { writeFileSync, existsSync } from 'node:fs';
+import { writeFileSync, existsSync, appendFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const args = process.argv.slice(2);
 const promptIdx = args.indexOf('-p');
 const prompt = promptIdx >= 0 ? (args[promptIdx + 1] ?? '') : '';
+
+// Test hook: when FAKE_RECORD_PATH is set, append this spawn's argv (one
+// JSON array per line) so tests can assert which flags the adapter passed.
+if (process.env.FAKE_RECORD_PATH) {
+  appendFileSync(process.env.FAKE_RECORD_PATH, JSON.stringify(args) + '\n');
+}
 
 let mode = process.env.FAKE_MODE ?? 'success';
 if (args.includes('--fail')) mode = 'fail';

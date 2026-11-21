@@ -4,13 +4,18 @@
 // This is NOT a browser-served page — the frontend lives in the Tauri app
 // and calls these endpoints; nothing here serves HTML.
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import type { Store } from './store.js';
+import type { ConfigModel, Store } from './store.js';
 import { computeScoreboard } from './scoreboard.js';
 import { verifyLedger } from './ledger.js';
 import { decideApproval, executeApprovedPush } from './approvals.js';
 import { subscribeBoardEvents, type BoardEvent } from './bus.js';
 import type { TunnelStatus } from './tunnel.js';
-import { isKnownExecutor, listExecutorModels, listExecutors } from './executors.js';
+import {
+  CONTEXT_OPTIONS,
+  isKnownExecutor,
+  listExecutorModels,
+  listExecutors,
+} from './executors.js';
 
 export interface TunnelTest {
   ok: boolean;
@@ -176,7 +181,9 @@ export function createBoardHandler(deps: BoardDeps) {
       }
       // -- executors ---------------------------------------------------------
       if (req.method === 'GET' && path === '/api/executors') {
-        const executors = await listExecutors(store);
+        const executors = await listExecutors(store, {
+          refresh: url.searchParams.get('refresh') === '1',
+        });
         json(res, 200, { executors });
         return true;
       }
@@ -221,9 +228,44 @@ export function createBoardHandler(deps: BoardDeps) {
         }
         const body = (await readJsonBody(req)) as Record<string, unknown>;
         const models = body.models;
-        if (models !== undefined && (!Array.isArray(models) || !models.every((m) => typeof m === 'string'))) {
-          json(res, 400, { error: 'models must be an array of strings' });
-          return true;
+        let parsedModels: ConfigModel[] | undefined;
+        if (models !== undefined) {
+          if (!Array.isArray(models)) {
+            json(res, 400, { error: 'models must be an array of {id, reasoning, context}' });
+            return true;
+          }
+          const seen = new Set<string>();
+          parsedModels = [];
+          for (const entry of models) {
+            if (typeof entry !== 'object' || entry === null) {
+              json(res, 400, { error: 'each model must be an object {id, reasoning, context}' });
+              return true;
+            }
+            const rec = entry as Record<string, unknown>;
+            const id = rec.id;
+            const reasoning = rec.reasoning;
+            const context = rec.context;
+            if (typeof id !== 'string' || id.trim() === '') {
+              json(res, 400, { error: 'each model needs a non-empty string id' });
+              return true;
+            }
+            if (reasoning !== 'low' && reasoning !== 'medium' && reasoning !== 'high') {
+              json(res, 400, { error: "each model reasoning must be 'low', 'medium' or 'high'" });
+              return true;
+            }
+            if (typeof context !== 'string' || !(CONTEXT_OPTIONS as readonly string[]).includes(context)) {
+              json(res, 400, {
+                error: `each model context must be one of ${CONTEXT_OPTIONS.join(', ')}`,
+              });
+              return true;
+            }
+            if (seen.has(id)) {
+              json(res, 400, { error: `duplicate model id: ${id}` });
+              return true;
+            }
+            seen.add(id);
+            parsedModels.push({ id, reasoning, context });
+          }
         }
         const defaultModel = body.defaultModel;
         if (defaultModel !== undefined && defaultModel !== null && typeof defaultModel !== 'string') {
@@ -232,30 +274,20 @@ export function createBoardHandler(deps: BoardDeps) {
         }
         if (
           typeof defaultModel === 'string' &&
-          Array.isArray(models) &&
-          !models.includes(defaultModel)
+          parsedModels !== undefined &&
+          !parsedModels.some((m) => m.id === defaultModel)
         ) {
           json(res, 400, { error: 'defaultModel must be one of models' });
           return true;
         }
-        const reasoning = body.reasoning;
-        if (
-          reasoning !== undefined &&
-          reasoning !== null &&
-          reasoning !== 'low' &&
-          reasoning !== 'medium' &&
-          reasoning !== 'high'
-        ) {
-          json(res, 400, { error: "reasoning must be 'low', 'medium', 'high' or null" });
-          return true;
-        }
-        // Model/reasoning config is recorded for the board; the CLI adapters
-        // do not yet pass model flags (flag names are unverified until the
-        // Mac pre-flight confirms them — see MILESTONES §8).
+        // The models array IS the enabled set: dispatch only ever uses a
+        // model from it (see dispatcher.resolveDispatchModel). The CLI
+        // adapters receive the chosen model via verified flags only
+        // (qoder: --model/--reasoning-effort/--context-window;
+        // codebuddy: --model).
         const config = store.upsertExecutorConfig(agent, {
-          models: Array.isArray(models) ? (models as string[]) : undefined,
+          models: parsedModels,
           defaultModel: (defaultModel as string | null | undefined) ?? undefined,
-          reasoning: (reasoning as string | null | undefined) ?? undefined,
         });
         json(res, 200, { config });
         return true;

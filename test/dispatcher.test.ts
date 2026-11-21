@@ -1,12 +1,13 @@
 // dispatcher tests — dispatch loop, isolation, failure, recovery.
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, chmodSync } from 'node:fs';
+import { mkdtempSync, chmodSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Store } from '../src/store.js';
 import { Dispatcher, waitForTerminal, recoverInterruptedAttempts } from '../src/dispatcher.js';
 import { codebuddyAdapter } from '../src/adapters/codebuddy.js';
+import { qoderAdapter } from '../src/adapters/qoder.js';
 import { makeTempGitRepo, tempDbPath, git } from './helpers.js';
 
 const fakeBin = join(process.cwd(), 'scripts', 'fake-executor.mjs');
@@ -17,6 +18,11 @@ function setup(mode: string): { store: Store; dispatcher: Dispatcher; dataDir: s
   process.env.FAKE_MODE = mode;
   const dataDir = mkdtempSync(join(tmpdir(), 'orch-dispatch-'));
   const store = new Store(tempDbPath());
+  // Dispatch is fail-closed: the agent needs at least one configured model.
+  store.upsertExecutorConfig('codebuddy', {
+    models: [{ id: 'hy3', reasoning: 'high', context: '128K' }],
+    defaultModel: 'hy3',
+  });
   const dispatcher = new Dispatcher(store, new Map([['codebuddy', codebuddyAdapter]]), dataDir);
   return { store, dispatcher, dataDir };
 }
@@ -146,6 +152,125 @@ describe('dispatcher', () => {
       assert.equal(recovered?.status, 'failed');
       assert.match(recovered?.stderr ?? '', /restarted while this attempt was running/);
       assert.equal(recoverInterruptedAttempts(store), 0);
+    } finally {
+      store.close();
+    }
+  });
+
+  it('refuses to dispatch when the agent has no configured models', async () => {
+    chmodSync(fakeBin, 0o755);
+    process.env.ORCHESTRATOR_CODEBUDDY_BIN = fakeBin;
+    process.env.FAKE_MODE = 'success';
+    const dataDir = mkdtempSync(join(tmpdir(), 'orch-dispatch-'));
+    const store = new Store(tempDbPath());
+    const dispatcher = new Dispatcher(store, new Map([['codebuddy', codebuddyAdapter]]), dataDir);
+    const repo = await makeTempGitRepo();
+    try {
+      await assert.rejects(
+        () =>
+          dispatcher.dispatch({
+            agent: 'codebuddy',
+            task: { title: 't', prompt: 'p' },
+            contract: 'c',
+            workdir: repo,
+          }),
+        /has no configured models/,
+      );
+      // Fail-closed before any record is made.
+      assert.equal(store.listAllMissions().length, 0);
+    } finally {
+      store.close();
+    }
+  });
+
+  it('passes --model to the codebuddy CLI (and only --model)', async () => {
+    const { store, dispatcher } = setup('success');
+    const repo = await makeTempGitRepo();
+    const recordPath = join(mkdtempSync(join(tmpdir(), 'orch-record-')), 'argv.log');
+    const prevRecord = process.env.FAKE_RECORD_PATH;
+    process.env.FAKE_RECORD_PATH = recordPath;
+    try {
+      const r = await dispatcher.dispatch({
+        agent: 'codebuddy',
+        task: { title: 'Create hello', prompt: 'create hello.ts' },
+        contract: 'hello.ts exists',
+        workdir: repo,
+      });
+      await waitForTerminal(store, r.attemptId);
+      const lines = readFileSync(recordPath, 'utf8').trim().split('\n');
+      assert.equal(lines.length, 1);
+      const argv = JSON.parse(lines[0] as string) as string[];
+      const modelIdx = argv.indexOf('--model');
+      assert.notEqual(modelIdx, -1);
+      assert.equal(argv[modelIdx + 1], 'hy3');
+      // CodeBuddy has no verified reasoning/context flags — none are passed.
+      assert.equal(argv.includes('--reasoning-effort'), false);
+      assert.equal(argv.includes('--context-window'), false);
+    } finally {
+      if (prevRecord === undefined) delete process.env.FAKE_RECORD_PATH;
+      else process.env.FAKE_RECORD_PATH = prevRecord;
+      store.close();
+    }
+  });
+
+  it('passes --model/--reasoning-effort/--context-window to the qoder CLI', async () => {
+    chmodSync(fakeBin, 0o755);
+    process.env.ORCHESTRATOR_QODER_BIN = fakeBin;
+    process.env.FAKE_MODE = 'success';
+    const dataDir = mkdtempSync(join(tmpdir(), 'orch-dispatch-'));
+    const store = new Store(tempDbPath());
+    store.upsertExecutorConfig('qoder', {
+      models: [{ id: 'Qwen3.8-Max', reasoning: 'medium', context: '200K' }],
+      defaultModel: 'Qwen3.8-Max',
+    });
+    const dispatcher = new Dispatcher(store, new Map([['qoder', qoderAdapter]]), dataDir);
+    const repo = await makeTempGitRepo();
+    const recordPath = join(mkdtempSync(join(tmpdir(), 'orch-record-')), 'argv.log');
+    const prevRecord = process.env.FAKE_RECORD_PATH;
+    process.env.FAKE_RECORD_PATH = recordPath;
+    try {
+      const r = await dispatcher.dispatch({
+        agent: 'qoder',
+        task: { title: 'Create hello', prompt: 'create hello.ts' },
+        contract: 'hello.ts exists',
+        workdir: repo,
+      });
+      await waitForTerminal(store, r.attemptId);
+      const lines = readFileSync(recordPath, 'utf8').trim().split('\n');
+      assert.equal(lines.length, 1);
+      const argv = JSON.parse(lines[0] as string) as string[];
+      assert.equal(argv[argv.indexOf('--model') + 1], 'Qwen3.8-Max');
+      assert.equal(argv[argv.indexOf('--reasoning-effort') + 1], 'medium');
+      assert.equal(argv[argv.indexOf('--context-window') + 1], '200000');
+    } finally {
+      if (prevRecord === undefined) delete process.env.FAKE_RECORD_PATH;
+      else process.env.FAKE_RECORD_PATH = prevRecord;
+      store.close();
+    }
+  });
+
+  it('pickAgent: codebuddy first, qoder fallback, null when none configured', () => {
+    const store = new Store(tempDbPath());
+    try {
+      const dispatcher = new Dispatcher(
+        store,
+        new Map([
+          ['codebuddy', codebuddyAdapter],
+          ['qoder', { name: 'qoder', run: async () => ({ exitCode: 0, signal: null, stderr: '' }) }],
+        ]),
+        mkdtempSync(join(tmpdir(), 'orch-dispatch-')),
+      );
+      assert.equal(dispatcher.pickAgent(['codebuddy', 'qoder']), null);
+      store.upsertExecutorConfig('qoder', {
+        models: [{ id: 'auto', reasoning: 'high', context: '128K' }],
+        defaultModel: 'auto',
+      });
+      assert.equal(dispatcher.pickAgent(['codebuddy', 'qoder']), 'qoder');
+      store.upsertExecutorConfig('codebuddy', {
+        models: [{ id: 'hy3', reasoning: 'high', context: '128K' }],
+        defaultModel: 'hy3',
+      });
+      assert.equal(dispatcher.pickAgent(['codebuddy', 'qoder']), 'codebuddy');
     } finally {
       store.close();
     }

@@ -8,9 +8,10 @@
 // and the scheduler drives task/mission transitions instead.
 import { join } from 'node:path';
 import { Store } from './store.js';
-import type { Attempt, Task } from './store.js';
+import type { Attempt, ConfigModel, Task } from './store.js';
 import { createWorktree, diffSummary, resolveDispatchBase } from './worktree.js';
 import type { ExecutorAdapter } from './adapters/types.js';
+import { resolveDispatchModel } from './executors.js';
 import { appendLedger } from './ledger.js';
 import { publishBoardEvent } from './bus.js';
 import { log } from './log.js';
@@ -42,6 +43,8 @@ export class Dispatcher {
   private dataDir: string;
   private finalizeTasks: boolean;
   private running = new Map<string, AbortController>();
+  /** Agents already warned about unapplied reasoning/context (once each). */
+  private warnedModelLimits = new Set<string>();
 
   constructor(
     store: Store,
@@ -55,9 +58,45 @@ export class Dispatcher {
     this.finalizeTasks = opts.finalizeTasks ?? true;
   }
 
+  /**
+   * First agent in `preferred` that can actually run: it has an adapter
+   * AND at least one configured model. Null when none can.
+   */
+  pickAgent(preferred: string[]): string | null {
+    for (const agent of preferred) {
+      if (!this.adapters.has(agent)) continue;
+      if (resolveDispatchModel(this.store, agent)) return agent;
+    }
+    return null;
+  }
+
+  /**
+   * The model a dispatch to `agent` must use. Fail-closed: an agent with
+   * no configured model is never dispatched (the CLI default is not a
+   * substitute for the user's chosen range).
+   */
+  private resolveModel(agent: string): ConfigModel {
+    const model = resolveDispatchModel(this.store, agent);
+    if (!model) {
+      throw new Error(`${agent} has no configured models; add models in Settings first`);
+    }
+    if (agent === 'codebuddy' && !this.warnedModelLimits.has(agent)) {
+      // --model is verified for codebuddy; reasoning/context flags are
+      // not documented, so they are stored but never passed to the CLI.
+      this.warnedModelLimits.add(agent);
+      log(
+        'warn',
+        'codebuddy applies only --model; per-model reasoning/context are stored but not passed (no verified flags)',
+        { agent, model: model.id },
+      );
+    }
+    return model;
+  }
+
   /** P0 path: create mission + task + attempt, then start it. */
   async dispatch(input: DispatchInput): Promise<DispatchResult> {
     const adapter = this.resolveAdapter(input.agent);
+    const model = this.resolveModel(input.agent);
     // Throws if workdir is missing or not a git repo — before any record is made.
     // Base = integration head when it exists (DAG semantics), else repo HEAD.
     const head = await resolveDispatchBase(input.workdir);
@@ -83,6 +122,7 @@ export class Dispatcher {
       task,
       mission.id,
       adapter,
+      model,
       input.workdir,
       head,
       input.task.title,
@@ -104,6 +144,7 @@ export class Dispatcher {
     contract: string,
   ): Promise<DispatchResult> {
     const adapter = this.resolveAdapter(agent);
+    const model = this.resolveModel(agent);
     const head = await resolveDispatchBase(workdir);
     const mission = this.store.getMission(task.missionId);
     if (!mission) throw new Error(`mission not found: ${task.missionId}`);
@@ -113,6 +154,7 @@ export class Dispatcher {
       task,
       mission.id,
       adapter,
+      model,
       workdir,
       head,
       task.title,
@@ -145,6 +187,7 @@ export class Dispatcher {
     task: Task,
     missionId: string,
     adapter: ExecutorAdapter,
+    model: ConfigModel,
     workdir: string,
     head: string,
     title: string,
@@ -170,13 +213,18 @@ export class Dispatcher {
       attemptId: attempt.id,
       summary: `${adapter.name} started: ${title}`,
     });
-    log('info', 'attempt started', { attemptId: attempt.id, agent: adapter.name, worktree: wt.path });
+    log('info', 'attempt started', {
+      attemptId: attempt.id,
+      agent: adapter.name,
+      model: model.id,
+      worktree: wt.path,
+    });
 
     const controller = new AbortController();
     this.running.set(attempt.id, controller);
     const fullPrompt = [`Task: ${title}`, '', prompt, '', 'Acceptance contract:', contract].join('\n');
     // Background run — dispatch returns without awaiting it (INV-5).
-    void this.runAttempt(attempt.id, task.id, missionId, adapter, fullPrompt, wt.path, controller);
+    void this.runAttempt(attempt.id, task.id, missionId, adapter, model, fullPrompt, wt.path, controller);
     return wt.path;
   }
 
@@ -185,6 +233,7 @@ export class Dispatcher {
     taskId: string,
     missionId: string,
     adapter: ExecutorAdapter,
+    model: ConfigModel,
     prompt: string,
     worktreePath: string,
     controller: AbortController,
@@ -194,6 +243,7 @@ export class Dispatcher {
         prompt,
         cwd: worktreePath,
         signal: controller.signal,
+        model,
         onEvent: (e) => this.store.addEvent(attemptId, e.type, e.payload),
       });
       const diff = await diffSummary(worktreePath).catch(() => null);

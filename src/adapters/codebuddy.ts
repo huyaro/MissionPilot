@@ -16,10 +16,16 @@ export const codebuddyAdapter: ExecutorAdapter = {
   async run(opts: RunOptions): Promise<AdapterRunResult> {
     const bin = process.env.ORCHESTRATOR_CODEBUDDY_BIN ?? 'codebuddy';
     const sandbox = process.env.ORCHESTRATOR_CODEBUDDY_SANDBOX !== '0';
+    const args: string[] = ['-p', opts.prompt, '--output-format', 'stream-json', '-y'];
+    // --model is in the official CLI reference ("Prompt and model" table:
+    // "Set the session model by alias or full name"). Reasoning/context
+    // flags are NOT documented for codebuddy, so they are stored in config
+    // but never passed — the dispatcher logs that (see dispatcher.ts).
+    if (opts.model) args.push('--model', opts.model.id);
     return runCli({
       ...opts,
       bin,
-      args: ['-p', opts.prompt, '--output-format', 'stream-json', '-y'],
+      args,
       env: sandbox ? { CODEBUDDY_IS_SANDBOX: '1' } : {},
     });
   },

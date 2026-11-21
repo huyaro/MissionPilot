@@ -10,6 +10,7 @@
 // scripts/fake-executor.mjs; the real binary is only on the user's Mac).
 // If the user has the domestic build, set ORCHESTRATOR_QODER_BIN=qodercn.
 import type { AdapterRunResult, ExecutorAdapter, RunOptions } from './types.js';
+import { contextLabelToTokens } from '../executors.js';
 import { runCli } from './cli.js';
 
 export const qoderAdapter: ExecutorAdapter = {
@@ -17,10 +18,20 @@ export const qoderAdapter: ExecutorAdapter = {
 
   async run(opts: RunOptions): Promise<AdapterRunResult> {
     const bin = process.env.ORCHESTRATOR_QODER_BIN ?? 'qoder';
+    const args: string[] = ['-p', opts.prompt, '--output-format', 'stream-json', '--yolo'];
+    // Model settings are session-only startup flags (docs.qoder.com/cli/model):
+    // --model (model id), --reasoning-effort (low|medium|high),
+    // --context-window (token count). All three are passed only when the
+    // dispatcher resolved a configured model.
+    if (opts.model) {
+      args.push('--model', opts.model.id, '--reasoning-effort', opts.model.reasoning);
+      const tokens = contextLabelToTokens(opts.model.context);
+      if (tokens !== null) args.push('--context-window', String(tokens));
+    }
     return runCli({
       ...opts,
       bin,
-      args: ['-p', opts.prompt, '--output-format', 'stream-json', '--yolo'],
+      args,
       env: {},
     });
   },

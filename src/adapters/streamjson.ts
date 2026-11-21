@@ -1,8 +1,7 @@
 // Shared stream-json line classifier.
 //
-// Each CLI's stream-json shape differs (codebuddy / qoder / gemini all have
-// their own event names), and the exact shapes are only verifiable on the
-// user's Mac (see MILESTONES.md §8). So this classifier is deliberately
+// Each CLI's stream-json shape differs (codebuddy / qoder have their own
+// event names), and the exact shapes are only verifiable on the user's Mac (see MILESTONES.md §8). So this classifier is deliberately
 // tolerant: it maps what it recognises and keeps everything else as a
 // `message` event with the raw payload — never drops a line, never crashes
 // on an unknown shape.

@@ -85,3 +85,71 @@ describe('store migration v1 -> v2', () => {
     }
   });
 });
+
+// Schema v4 -> v5 migration: executor_config.models goes from string[] to
+// [{id, reasoning, context}]; the old top-level reasoning column is folded
+// into each model and then dropped.
+const V4_EXECUTOR_CONFIG_SCHEMA = `
+CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE executor_config (
+  agent TEXT PRIMARY KEY,
+  models TEXT NOT NULL DEFAULT '[]',
+  default_model TEXT,
+  reasoning TEXT,
+  updated_at TEXT NOT NULL
+);
+`;
+
+function makeV4Db(path: string): void {
+  mkdirSync(dirname(path), { recursive: true });
+  const db = new DatabaseSync(path);
+  db.exec(V4_EXECUTOR_CONFIG_SCHEMA);
+  db.prepare("INSERT INTO meta (key, value) VALUES ('schema_version', '4')").run();
+  const now = new Date().toISOString();
+  db.prepare(
+    "INSERT INTO executor_config (agent, models, default_model, reasoning, updated_at) VALUES ('codebuddy', ?, 'hy3', 'low', ?)",
+  ).run(JSON.stringify(['hy3', 'deepseek-v4-pro']), now);
+  // Default not in the list: migration falls back to the first model.
+  db.prepare(
+    "INSERT INTO executor_config (agent, models, default_model, reasoning, updated_at) VALUES ('qoder', ?, 'gone', 'medium', ?)",
+  ).run(JSON.stringify(['auto']), now);
+  db.close();
+}
+
+describe('store migration v4 -> v5', () => {
+  it('migrates executor_config models to per-model objects and drops reasoning', () => {
+    const dbPath = tempDbPath();
+    makeV4Db(dbPath);
+    const store = new Store(dbPath);
+    try {
+      const cb = store.getExecutorConfig('codebuddy');
+      assert.deepEqual(cb?.models, [
+        { id: 'hy3', reasoning: 'low', context: '128K' },
+        { id: 'deepseek-v4-pro', reasoning: 'low', context: '128K' },
+      ]);
+      assert.equal(cb?.defaultModel, 'hy3');
+      const q = store.getExecutorConfig('qoder');
+      assert.deepEqual(q?.models, [{ id: 'auto', reasoning: 'medium', context: '128K' }]);
+      assert.equal(q?.defaultModel, 'auto');
+      // The reasoning column is gone; the schema version bumped.
+      const probe = new DatabaseSync(dbPath);
+      try {
+        const cols = (
+          probe.prepare('PRAGMA table_info(executor_config)').all() as Array<{ name: string }>
+        ).map((c) => c.name);
+        assert.ok(!cols.includes('reasoning'));
+      } finally {
+        probe.close();
+      }
+      // New writes work on the migrated schema.
+      const next = store.upsertExecutorConfig('codebuddy', {
+        models: [{ id: 'hy3', reasoning: 'high', context: '64K' }],
+        defaultModel: 'hy3',
+      });
+      assert.deepEqual(next.models, [{ id: 'hy3', reasoning: 'high', context: '64K' }]);
+      assert.equal(store.getExecutorConfig('codebuddy')?.models[0]?.context, '64K');
+    } finally {
+      store.close();
+    }
+  });
+});

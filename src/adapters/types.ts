@@ -1,6 +1,8 @@
 // Adapter interface: every executor CLI (codebuddy, qoder, ...) is spawned
 // headless and speaks stream-json; the adapter turns its output into unified
 // events the dispatcher stores. INV-1: only the backend spawns CLIs.
+import type { ConfigModel } from '../store.js';
+
 export type AdapterEventType = 'message' | 'tool_call' | 'file_edit' | 'cost';
 
 export interface UnifiedEvent {
@@ -24,6 +26,12 @@ export interface RunOptions {
   onEvent: (event: UnifiedEvent) => void;
   /** Abort the run (scheduler timeout). The adapter kills the child. */
   signal?: AbortSignal;
+  /**
+   * The configured model to run with (resolved by the dispatcher from the
+   * executor's Settings config — never a model outside that list).
+   * Adapters pass it only via verified CLI flags.
+   */
+  model?: ConfigModel;
 }
 
 export interface ExecutorAdapter {

@@ -26,6 +26,15 @@ async function startServer(readOnly: boolean): Promise<Started> {
   process.env.FAKE_MODE = 'success';
   const dataDir = mkdtempSync(join(tmpdir(), 'orch-http-'));
   const store = new Store(tempDbPath());
+  // Dispatch is fail-closed: the agent needs at least one configured model.
+  store.upsertExecutorConfig('codebuddy', {
+    models: [{ id: 'hy3', reasoning: 'high', context: '128K' }],
+    defaultModel: 'hy3',
+  });
+  store.upsertExecutorConfig('qoder', {
+    models: [{ id: 'auto', reasoning: 'high', context: '128K' }],
+    defaultModel: 'auto',
+  });
   const dispatcher = new Dispatcher(
     store,
     new Map([

@@ -1,11 +1,19 @@
 import { useEffect, useState } from 'react';
-import type { BoardApi, ExecutorInfo } from '../api';
+import type { BoardApi, ConfigModel, ExecutorInfo } from '../api';
 import { statusLabel } from '../labels';
 
-const REASONING_LEVELS = ['low', 'medium', 'high'] as const;
+const REASONING_LABELS: Record<ConfigModel['reasoning'], string> = {
+  low: '低',
+  medium: '中',
+  high: '高',
+};
+const CONTEXT_OPTIONS = ['32K', '64K', '128K', '200K', '400K', '1M'];
+
+type Tab = 'brain' | 'executors' | 'tunnel';
 
 export function Connections(props: { api: BoardApi; onChanged?: () => void }) {
   const { api, onChanged } = props;
+  const [tab, setTab] = useState<Tab>('brain');
   const [data, setData] = useState<Awaited<ReturnType<BoardApi['connections']>> | null>(null);
   const [executors, setExecutors] = useState<ExecutorInfo[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -18,19 +26,18 @@ export function Connections(props: { api: BoardApi; onChanged?: () => void }) {
   const [stopping, setStopping] = useState(false);
   // Tunnel start/stop failure, shown inline next to the button.
   const [tunnelError, setTunnelError] = useState<string | null>(null);
-  // Local edits per executor: chosen default model + reasoning level.
-  // The model list itself is never typed — it comes from the agent.
-  const [edits, setEdits] = useState<
-    Record<string, { defaultModel: string; reasoning: string }>
-  >({});
+  // Local edits per executor: the configured model list (the array IS the
+  // enabled set) + the default model. Never typed — models come from the
+  // agent's own list mechanism.
+  const [edits, setEdits] = useState<Record<string, { models: ConfigModel[]; defaultModel: string | null }>>({});
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
   // Model list per executor, fetched from the agent's own mechanism.
   type ModelsState =
     | { status: 'loading' }
     | { status: 'ready'; models: string[]; source: string }
     | { status: 'error'; error: string };
   const [modelsState, setModelsState] = useState<Record<string, ModelsState>>({});
-  const [showAdd, setShowAdd] = useState(false);
-  const [addError, setAddError] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
 
@@ -70,23 +77,29 @@ export function Connections(props: { api: BoardApi; onChanged?: () => void }) {
   };
 
   // Executors + local edit state. NOT polled: rebuilding `edits` every
-  // tick would wipe unsaved changes.
-  const loadExecutors = () => {
+  // tick would wipe unsaved changes. `refresh` bypasses the backend's
+  // 60s detection cache (the 重新检测 button).
+  const loadExecutors = (refresh = false) => {
     api
-      .executors()
+      .executors(refresh)
       .then((r) => {
         setExecutors(r.executors);
-        const next: Record<string, { defaultModel: string; reasoning: string }> = {};
+        const next: Record<string, { models: ConfigModel[]; defaultModel: string | null }> = {};
         for (const e of r.executors) {
           next[e.id] = {
-            defaultModel: e.config?.defaultModel ?? '',
-            reasoning: e.config?.reasoning ?? '',
+            models: e.config?.models ?? [],
+            defaultModel: e.config?.defaultModel ?? null,
           };
         }
         setEdits(next);
-        for (const e of r.executors) {
-          if (e.added) fetchModels(e.id);
-        }
+        // Keep the selection when it still exists; otherwise pick the
+        // first detected agent (the backend already sorts detected first).
+        setSelectedId((prev) => {
+          const keep = prev !== null && r.executors.some((e) => e.id === prev) ? prev : null;
+          const chosen = keep ?? r.executors[0]?.id ?? null;
+          if (chosen) fetchModels(chosen);
+          return chosen;
+        });
       })
       .catch(() => undefined);
   };
@@ -108,49 +121,66 @@ export function Connections(props: { api: BoardApi; onChanged?: () => void }) {
     return () => clearInterval(timer);
   }, [api]);
 
+  const selectExecutor = (id: string) => {
+    setSelectedId(id);
+    setPickerOpen(false);
+    setConfirmRemove(null);
+    fetchModels(id);
+  };
+
+  const addModel = (agentId: string, modelId: string) => {
+    setEdits((prev) => {
+      const cur = prev[agentId] ?? { models: [], defaultModel: null };
+      if (cur.models.some((m) => m.id === modelId)) return prev;
+      const models = [...cur.models, { id: modelId, reasoning: 'high' as const, context: '128K' }];
+      return {
+        ...prev,
+        [agentId]: { models, defaultModel: cur.defaultModel ?? modelId },
+      };
+    });
+  };
+
+  const updateModel = (agentId: string, modelId: string, patch: Partial<ConfigModel>) => {
+    setEdits((prev) => {
+      const cur = prev[agentId];
+      if (!cur) return prev;
+      return {
+        ...prev,
+        [agentId]: {
+          ...cur,
+          models: cur.models.map((m) => (m.id === modelId ? { ...m, ...patch } : m)),
+        },
+      };
+    });
+  };
+
+  const removeModel = (agentId: string, modelId: string) => {
+    setEdits((prev) => {
+      const cur = prev[agentId];
+      if (!cur) return prev;
+      const models = cur.models.filter((m) => m.id !== modelId);
+      // Deleting the default falls back to the first remaining model.
+      const defaultModel =
+        cur.defaultModel === modelId ? (models[0]?.id ?? null) : cur.defaultModel;
+      return { ...prev, [agentId]: { models, defaultModel } };
+    });
+  };
+
   const save = async (id: string) => {
     const edit = edits[id];
     if (!edit) return;
-    const ms = modelsState[id];
-    const executor = executors.find((e) => e.id === id);
-    // Save the fetched catalogue as `models`; when the fetch failed, keep
-    // the previously saved list so the saved default still validates.
-    const models = ms?.status === 'ready' ? ms.models : (executor?.config?.models ?? []);
-    // A default that is no longer on the fetched list falls back to the
-    // CLI default instead of failing the save (the UI says so, see below).
-    const chosen =
-      ms?.status === 'ready' && edit.defaultModel.trim() !== '' && !ms.models.includes(edit.defaultModel.trim())
-        ? ''
-        : edit.defaultModel.trim();
     setError(null);
     setSaved(null);
     setBusyId(id);
     try {
       await api.saveExecutorConfig(id, {
-        models,
-        defaultModel: chosen || null,
-        reasoning: (edit.reasoning || null) as 'low' | 'medium' | 'high' | null,
+        models: edit.models,
+        defaultModel: edit.defaultModel,
       });
       setSaved(`${id} 配置已保存`);
       load();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusyId(null);
-    }
-  };
-
-  const addExecutor = async (id: string) => {
-    setAddError(null);
-    setBusyId(id);
-    try {
-      // Adding = creating the saved config row (empty); the model list
-      // is fetched right after, via load().
-      await api.saveExecutorConfig(id, {});
-      setSaved(`${id} 已添加`);
-      load();
-    } catch (e) {
-      setAddError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusyId(null);
     }
@@ -166,7 +196,7 @@ export function Connections(props: { api: BoardApi; onChanged?: () => void }) {
     setBusyId(id);
     try {
       await api.removeExecutorConfig(id);
-      setSaved(`${id} 已移除，可随时重新添加`);
+      setSaved(`${id} 已移除，可随时重新配置`);
       setModelsState((prev) => {
         const next = { ...prev };
         delete next[id];
@@ -237,11 +267,24 @@ export function Connections(props: { api: BoardApi; onChanged?: () => void }) {
   const canStartTunnel =
     (tunnelId.trim() !== '' || (data?.tunnelConfig?.tunnelId ?? '') !== '') &&
     (apiKey.trim() !== '' || (data?.tunnelConfig?.apiKeySet ?? false));
-  // Added = has a saved config row; candidates = CLI agents not yet added.
-  const addedExecutors = executors.filter((e) => e.added);
-  const addCandidates = executors.filter(
-    (e) => (e.id === 'codebuddy' || e.id === 'qoder') && !e.added,
-  );
+
+  const selected = executors.find((e) => e.id === selectedId) ?? null;
+  const selectedEdit = selected ? (edits[selected.id] ?? { models: [], defaultModel: null }) : null;
+  const selectedModels = selected ? modelsState[selected.id] : undefined;
+  // Fetched models not yet added — the pool the 选择模型 picker draws from.
+  const unaddedModels =
+    selectedModels?.status === 'ready' && selectedEdit
+      ? selectedModels.models.filter((m) => !selectedEdit.models.some((cm) => cm.id === m))
+      : [];
+
+  const scopeLine = (edit: { models: ConfigModel[]; defaultModel: string | null }): string => {
+    if (edit.models.length === 0) return '未添加任何模型，该 agent 不会参与派发。';
+    const parts = edit.models.map(
+      (m) =>
+        `${m.id}（${REASONING_LABELS[m.reasoning]} · ${m.context}${m.id === edit.defaultModel ? '，默认' : ''}）`,
+    );
+    return `派发时仅使用：${parts.join('、')}`;
+  };
 
   return (
     <div>
@@ -249,268 +292,399 @@ export function Connections(props: { api: BoardApi; onChanged?: () => void }) {
       <p className="sub">主脑、执行者、隧道——以及各执行者应使用的模型。</p>
       {error && <p className="error">{error}</p>}
       {saved && <p style={{ color: 'var(--green)' }}>{saved}</p>}
-      <div className="card">
-        <h2>主脑</h2>
-        {data === null ? (
-          <p className="sub">加载中…</p>
-        ) : (
-          <table>
-            <thead>
-              <tr>
-                <th>大脑</th>
-                <th>传输方式</th>
-                <th>状态</th>
-                <th>说明</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.brains.map((b) => (
-                <tr key={b.id}>
-                  <td>
-                    <strong>{b.label}</strong>
-                  </td>
-                  <td>{b.transport}</td>
-                  <td>
-                    <span className={`pill ${b.status}`}>{statusLabel(b.status)}</span>
-                  </td>
-                  <td>{b.note}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
+      <div className="tabs">
+        <button className={`tab${tab === 'brain' ? ' active' : ''}`} onClick={() => setTab('brain')}>
+          主脑
+        </button>
+        <button
+          className={`tab${tab === 'executors' ? ' active' : ''}`}
+          onClick={() => setTab('executors')}
+        >
+          执行者
+        </button>
+        <button
+          className={`tab${tab === 'tunnel' ? ' active' : ''}`}
+          onClick={() => setTab('tunnel')}
+        >
+          隧道
+        </button>
       </div>
-      <div className="card">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <h2>执行者</h2>
-          <button className="btn secondary" onClick={() => setShowAdd((v) => !v)}>
-            {showAdd ? '收起' : '添加'}
-          </button>
+
+      {tab === 'brain' && (
+        <div className="card">
+          <h2>主脑</h2>
+          {data === null ? (
+            <p className="sub">加载中…</p>
+          ) : (
+            <table>
+              <thead>
+                <tr>
+                  <th>大脑</th>
+                  <th>传输方式</th>
+                  <th>状态</th>
+                  <th>说明</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.brains.map((b) => (
+                  <tr key={b.id}>
+                    <td>
+                      <strong>{b.label}</strong>
+                    </td>
+                    <td>{b.transport}</td>
+                    <td>
+                      <span className={`pill ${b.status}`}>{statusLabel(b.status)}</span>
+                    </td>
+                    <td>{b.note}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </div>
-        {showAdd && (
-          <div>
-            {addCandidates.length === 0 ? (
-              <p className="sub">本地检测到的执行者都已添加。</p>
+      )}
+
+      {tab === 'executors' && (
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'minmax(280px, 340px) 1fr',
+            gap: 16,
+            alignItems: 'start',
+          }}
+        >
+          <div className="card" style={{ marginBottom: 0 }}>
+            <h2>本地 Agent</h2>
+            {executors.length === 0 ? (
+              <p className="sub">加载中…</p>
             ) : (
-              <table>
-                <tbody>
-                  {addCandidates.map((e) => (
-                    <tr key={e.id}>
-                      <td>
-                        <strong>{e.label}</strong>
-                      </td>
-                      <td>
-                        <span className={`pill ${e.state}`}>{statusLabel(e.state)}</span>
-                      </td>
-                      <td className="sub">
-                        {e.detected ? '已检测到' : `未检测到（PATH 中没有 ${e.id}）`}
-                      </td>
-                      <td>
+              <div>
+                {executors.map((e) => (
+                  <div
+                    key={e.id}
+                    onClick={() => selectExecutor(e.id)}
+                    style={{
+                      padding: '10px 12px',
+                      borderRadius: 8,
+                      cursor: 'pointer',
+                      background:
+                        e.id === selectedId ? 'var(--accent-bg)' : 'transparent',
+                      border:
+                        e.id === selectedId
+                          ? '1px solid var(--accent)'
+                          : '1px solid transparent',
+                      marginBottom: 4,
+                    }}
+                  >
+                    <div
+                      style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+                    >
+                      <strong>{e.label}</strong>
+                      <span style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                        {e.added && <span className="sub">已配置</span>}
+                        <span className={`pill ${e.detected ? 'connected' : 'missing'}`}>
+                          {e.detected ? '已检测到' : '未检测到'}
+                        </span>
+                      </span>
+                    </div>
+                    <div className="sub" style={{ marginTop: 4, wordBreak: 'break-all' }}>
+                      {e.detected && e.signal
+                        ? e.signal.kind === 'binary'
+                          ? `二进制 ${e.signal.value}`
+                          : `配置目录 ${e.signal.value}`
+                        : e.reason}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="card" style={{ marginBottom: 0 }}>
+            {selected === null || selectedEdit === null ? (
+              <p className="sub">没有可配置的 agent。</p>
+            ) : (
+              <>
+                <div
+                  style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}
+                >
+                  <div>
+                    <h2 style={{ marginBottom: 6 }}>
+                      {selected.label}{' '}
+                      <span className={`pill ${selected.detected ? 'connected' : 'missing'}`}>
+                        {selected.detected ? '已检测到' : '未检测到'}
+                      </span>
+                    </h2>
+                    <p className="sub" style={{ margin: '0 0 4px' }}>
+                      {selected.version ? `版本 ${selected.version}` : '版本未知'}
+                      {selected.detected && selected.signal
+                        ? selected.signal.kind === 'binary'
+                          ? ` · 二进制 ${selected.signal.value}`
+                          : ` · 配置目录 ${selected.signal.value}`
+                        : ''}
+                    </p>
+                  </div>
+                  {selected.added && (
+                    <button
+                      className="btn secondary"
+                      disabled={busyId === selected.id}
+                      onClick={() => void removeExecutor(selected.id)}
+                    >
+                      {confirmRemove === selected.id ? '确认移除？' : '移除'}
+                    </button>
+                  )}
+                </div>
+
+                {!selected.detected && (
+                  <div>
+                    <p className="error">{selected.reason}</p>
+                    <button
+                      className="btn secondary"
+                      onClick={() => loadExecutors(true)}
+                    >
+                      重新检测
+                    </button>
+                  </div>
+                )}
+
+                {!selected.dispatchable && (
+                  <p className="sub">
+                    该 agent 的派发尚未接入：可检测、可配置模型，但主脑暂时无法向它派发任务。
+                  </p>
+                )}
+
+                {selected.detected && (
+                  <>
+                    {selectedModels === undefined || selectedModels.status === 'loading' ? (
+                      <p className="sub">加载模型中…</p>
+                    ) : selectedModels.status === 'error' ? (
+                      <div>
+                        <p className="error">模型列表获取失败</p>
+                        <p className="sub">{selectedModels.error}</p>
                         <button
                           className="btn secondary"
-                          disabled={!e.detected || busyId === e.id}
-                          onClick={() => void addExecutor(e.id)}
+                          onClick={() => fetchModels(selected.id, true)}
                         >
-                          {busyId === e.id ? '添加中…' : '添加'}
+                          重试
                         </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-            {addError && <p className="error">{addError}</p>}
-          </div>
-        )}
-        {addedExecutors.length === 0 ? (
-          <p className="sub">尚未添加执行者。点「添加」从本地检测到的 agent 里挑一个。</p>
-        ) : (
-          <table>
-            <thead>
-              <tr>
-                <th>执行者</th>
-                <th>状态</th>
-                <th>模型</th>
-                <th>推理等级</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {addedExecutors.map((e) => {
-                const edit = edits[e.id] ?? { defaultModel: '', reasoning: '' };
-                const ms = modelsState[e.id];
-                const staleDefault =
-                  edit.defaultModel !== '' &&
-                  ms?.status === 'ready' &&
-                  !ms.models.includes(edit.defaultModel);
-                return (
-                  <tr key={e.id}>
-                    <td>
-                      <strong>{e.label}</strong>
-                    </td>
-                    <td>
-                      <span className={`pill ${e.state}`}>{statusLabel(e.state)}</span>
-                    </td>
-                    <td>
-                      {ms === undefined || ms.status === 'loading' ? (
-                        <span className="sub">加载模型中…</span>
-                      ) : ms.status === 'error' ? (
-                        <span>
-                          <span className="error">模型列表获取失败</span>{' '}
-                          <button className="btn secondary" onClick={() => fetchModels(e.id, true)}>
-                            重试
-                          </button>
-                          <br />
-                          <span className="sub">{ms.error}</span>
-                        </span>
-                      ) : (
-                        <span>
-                          <select
-                            value={ms.models.includes(edit.defaultModel) ? edit.defaultModel : ''}
-                            onChange={(ev) =>
-                              setEdits((prev) => ({
-                                ...prev,
-                                [e.id]: { ...edit, defaultModel: ev.target.value },
-                              }))
-                            }
-                            style={{ width: 220 }}
+                      </div>
+                    ) : (
+                      <>
+                        <div
+                          style={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                          }}
+                        >
+                          <h3 style={{ margin: '18px 0 8px' }}>模型与派发范围</h3>
+                          <button
+                            className="btn secondary"
+                            onClick={() => setPickerOpen((v) => !v)}
                           >
-                            <option value="">使用 CLI 默认模型</option>
-                            {ms.models.map((m) => (
-                              <option key={m} value={m}>
-                                {m}
-                              </option>
-                            ))}
-                          </select>
-                          <br />
-                          <span className="sub">来源：{ms.source}</span>
-                          {staleDefault && (
-                            <>
-                              <br />
-                              <span className="error">
-                                之前选的 {edit.defaultModel}{' '}
-                                已不在当前列表中，保存时会改用 CLI 默认模型
-                              </span>
-                            </>
-                          )}
-                        </span>
-                      )}
-                    </td>
-                    <td>
-                      <select
-                        value={edit.reasoning}
-                        onChange={(ev) =>
-                          setEdits((prev) => ({
-                            ...prev,
-                            [e.id]: { ...edit, reasoning: ev.target.value },
-                          }))
-                        }
-                      >
-                        <option value="">—</option>
-                        {REASONING_LEVELS.map((l) => (
-                          <option key={l} value={l}>
-                            {l}
-                          </option>
-                        ))}
-                      </select>
-                    </td>
-                    <td>
-                      <button
-                        className="btn secondary"
-                        disabled={busyId === e.id}
-                        onClick={() => void save(e.id)}
-                      >
-                        {busyId === e.id ? '保存中…' : '保存'}
-                      </button>{' '}
-                      <button
-                        className="btn secondary"
-                        disabled={busyId === e.id}
-                        onClick={() => void removeExecutor(e.id)}
-                      >
-                        {confirmRemove === e.id ? '确认移除？' : '移除'}
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        )}
-      </div>
-      <div className="card">
-        <h2>隧道</h2>
-        {data?.tunnel ? (
-          <table>
-            <tbody>
-              <tr>
-                <td>隧道 ID</td>
-                <td className="mono">{data.tunnel.tunnelId}</td>
-              </tr>
-              <tr>
-                <td>状态</td>
-                <td>
-                  <span className={`pill ${data.tunnel.state}`}>{statusLabel(data.tunnel.state)}</span>
-                </td>
-              </tr>
-              <tr>
-                <td>健康检查 URL</td>
-                <td className="mono">{data.tunnel.healthUrl ?? '—'}</td>
-              </tr>
-              <tr>
-                <td>PID</td>
-                <td>{data.tunnel.pid ?? '—'}</td>
-              </tr>
-              <tr>
-                <td>重启次数</td>
-                <td>{data.tunnel.restarts}</td>
-              </tr>
-              <tr>
-                <td>最近错误</td>
-                <td>{data.tunnel.lastError ?? '—'}</td>
-              </tr>
-            </tbody>
-          </table>
-        ) : (
-          <p className="sub">隧道未启用。填写下面的 Tunnel ID 与 API key，点「启动隧道」。</p>
-        )}
-        <div className="form-row">
-          <label>隧道 ID</label>
-          <input
-            value={tunnelId}
-            onChange={(ev) => setTunnelId(ev.target.value)}
-            placeholder="tunnel_..."
-            style={{ width: 280 }}
-          />
+                            {pickerOpen ? '收起' : '选择模型'}
+                          </button>
+                        </div>
+                        <p className="sub" style={{ marginTop: 0 }}>
+                          来源：{selectedModels.source}
+                        </p>
+                        {pickerOpen && (
+                          <div style={{ marginBottom: 12 }}>
+                            {unaddedModels.length === 0 ? (
+                              <p className="sub">该 agent 的模型已全部添加。</p>
+                            ) : (
+                              <table>
+                                <tbody>
+                                  {unaddedModels.map((m) => (
+                                    <tr key={m}>
+                                      <td>{m}</td>
+                                      <td style={{ textAlign: 'right' }}>
+                                        <button
+                                          className="btn secondary"
+                                          onClick={() => addModel(selected.id, m)}
+                                        >
+                                          添加
+                                        </button>
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            )}
+                          </div>
+                        )}
+                        {selectedEdit.models.length === 0 ? (
+                          <p className="sub">尚未添加模型，点右上角「选择模型」添加。</p>
+                        ) : (
+                          <table>
+                            <thead>
+                              <tr>
+                                <th>模型</th>
+                                <th>推理等级</th>
+                                <th>上下文</th>
+                                <th>默认</th>
+                                <th></th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {selectedEdit.models.map((m) => (
+                                <tr key={m.id}>
+                                  <td>
+                                    <strong>{m.id}</strong>
+                                  </td>
+                                  <td>
+                                    <select
+                                      value={m.reasoning}
+                                      onChange={(ev) =>
+                                        updateModel(selected.id, m.id, {
+                                          reasoning: ev.target.value as ConfigModel['reasoning'],
+                                        })
+                                      }
+                                    >
+                                      {(['low', 'medium', 'high'] as const).map((l) => (
+                                        <option key={l} value={l}>
+                                          {REASONING_LABELS[l]}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </td>
+                                  <td>
+                                    <select
+                                      value={m.context}
+                                      onChange={(ev) =>
+                                        updateModel(selected.id, m.id, { context: ev.target.value })
+                                      }
+                                    >
+                                      {CONTEXT_OPTIONS.map((c) => (
+                                        <option key={c} value={c}>
+                                          {c}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </td>
+                                  <td>
+                                    <input
+                                      type="radio"
+                                      name={`default-${selected.id}`}
+                                      checked={selectedEdit.defaultModel === m.id}
+                                      onChange={() =>
+                                        setEdits((prev) => ({
+                                          ...prev,
+                                          [selected.id]: { ...selectedEdit, defaultModel: m.id },
+                                        }))
+                                      }
+                                    />
+                                  </td>
+                                  <td style={{ textAlign: 'right' }}>
+                                    <button
+                                      className="btn secondary"
+                                      onClick={() => removeModel(selected.id, m.id)}
+                                    >
+                                      删除
+                                    </button>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        )}
+                        <p className="sub" style={{ marginTop: 16 }}>
+                          {scopeLine(selectedEdit)}
+                        </p>
+                        <button
+                          className="btn"
+                          style={{ width: '100%' }}
+                          disabled={busyId === selected.id}
+                          onClick={() => void save(selected.id)}
+                        >
+                          {busyId === selected.id ? '保存中…' : '保存配置'}
+                        </button>
+                      </>
+                    )}
+                  </>
+                )}
+              </>
+            )}
+          </div>
         </div>
-        <div className="form-row">
-          <label>API 密钥</label>
-          <input
-            type="password"
-            value={apiKey}
-            onChange={(ev) => setApiKey(ev.target.value)}
-            placeholder={
-              data?.tunnelConfig?.apiKeySet ? '已保存，留空使用已保存的密钥' : '输入 API 密钥'
-            }
-            style={{ width: 280 }}
-          />
-        </div>
-        <div className="btn-row">
-          {tunnelActive ? (
-            <button className="btn danger" disabled={stopping} onClick={() => void stopTunnel()}>
-              {stopping ? '停止中…' : '停止隧道'}
-            </button>
+      )}
+
+      {tab === 'tunnel' && (
+        <div className="card">
+          <h2>隧道</h2>
+          {data?.tunnel ? (
+            <table>
+              <tbody>
+                <tr>
+                  <td>隧道 ID</td>
+                  <td className="mono">{data.tunnel.tunnelId}</td>
+                </tr>
+                <tr>
+                  <td>状态</td>
+                  <td>
+                    <span className={`pill ${data.tunnel.state}`}>{statusLabel(data.tunnel.state)}</span>
+                  </td>
+                </tr>
+                <tr>
+                  <td>健康检查 URL</td>
+                  <td className="mono">{data.tunnel.healthUrl ?? '—'}</td>
+                </tr>
+                <tr>
+                  <td>PID</td>
+                  <td>{data.tunnel.pid ?? '—'}</td>
+                </tr>
+                <tr>
+                  <td>重启次数</td>
+                  <td>{data.tunnel.restarts}</td>
+                </tr>
+                <tr>
+                  <td>最近错误</td>
+                  <td>{data.tunnel.lastError ?? '—'}</td>
+                </tr>
+              </tbody>
+            </table>
           ) : (
-            <button
-              className="btn"
-              disabled={starting || !canStartTunnel}
-              onClick={() => void startTunnel()}
-            >
-              {starting ? '启动中…' : '启动隧道'}
-            </button>
+            <p className="sub">隧道未启用。填写下面的 Tunnel ID 与 API key，点「启动隧道」。</p>
           )}
-          {tunnelError && <span className="error">{tunnelError}</span>}
+          <div className="form-row">
+            <label>隧道 ID</label>
+            <input
+              value={tunnelId}
+              onChange={(ev) => setTunnelId(ev.target.value)}
+              placeholder="tunnel_..."
+              style={{ width: 280 }}
+            />
+          </div>
+          <div className="form-row">
+            <label>API 密钥</label>
+            <input
+              type="password"
+              value={apiKey}
+              onChange={(ev) => setApiKey(ev.target.value)}
+              placeholder={
+                data?.tunnelConfig?.apiKeySet ? '已保存，留空使用已保存的密钥' : '输入 API 密钥'
+              }
+              style={{ width: 280 }}
+            />
+          </div>
+          <div className="btn-row">
+            {tunnelActive ? (
+              <button className="btn danger" disabled={stopping} onClick={() => void stopTunnel()}>
+                {stopping ? '停止中…' : '停止隧道'}
+              </button>
+            ) : (
+              <button
+                className="btn"
+                disabled={starting || !canStartTunnel}
+                onClick={() => void startTunnel()}
+              >
+                {starting ? '启动中…' : '启动隧道'}
+              </button>
+            )}
+            {tunnelError && <span className="error">{tunnelError}</span>}
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }

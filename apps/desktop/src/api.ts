@@ -101,19 +101,33 @@ export interface LedgerEntry {
   hash: string;
 }
 
+export interface ConfigModel {
+  id: string;
+  reasoning: 'low' | 'medium' | 'high';
+  context: string;
+}
+
 export interface ExecutorInfo {
   id: string;
   label: string;
   state: 'connected' | 'pending' | 'not-connected' | 'missing';
-  /** Binary found on PATH (CLI executors). */
+  /** Binary or config path found (Magpie-style detection). */
   detected: boolean;
-  /** A config row exists in executor_config (i.e. the user added it). */
+  /** What proved the install: the binary path, or the config path. */
+  signal: { kind: 'binary' | 'config'; value: string } | null;
+  /** Why not detected — names the bins and paths that were checked. */
+  reason: string;
+  /** Version from `<bin> --version`, when a binary was found and answered. */
+  version: string | null;
+  /** Whether dispatch is wired for this agent (has a CLI adapter). */
+  dispatchable: boolean;
+  /** A config row exists in executor_config (i.e. the user configured it). */
   added: boolean;
   config: {
     agent: string;
-    models: string[];
+    /** The models array IS the enabled set (dispatch only uses these). */
+    models: ConfigModel[];
     defaultModel: string | null;
-    reasoning: string | null;
     updatedAt: string;
   } | null;
 }
@@ -204,8 +218,8 @@ export class BoardApi {
     });
   }
 
-  executors(): Promise<{ executors: ExecutorInfo[] }> {
-    return this.req('/api/executors');
+  executors(refresh = false): Promise<{ executors: ExecutorInfo[] }> {
+    return this.req(`/api/executors${refresh ? '?refresh=1' : ''}`);
   }
 
   connections(): Promise<{
@@ -232,7 +246,7 @@ export class BoardApi {
 
   async saveExecutorConfig(
     agent: string,
-    config: { models?: string[]; defaultModel?: string | null; reasoning?: string | null },
+    config: { models?: ConfigModel[]; defaultModel?: string | null },
   ): Promise<{ config: NonNullable<ExecutorInfo['config']> }> {
     return this.req(`/api/executors/${agent}/config`, {
       method: 'PUT',

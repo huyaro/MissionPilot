@@ -16,6 +16,7 @@ let http: HttpMcpServer;
 let base: string;
 let prevCodebuddyBin: string | undefined;
 let prevQoderBin: string | undefined;
+let prevPiBin: string | undefined;
 
 async function api(path: string, opts: RequestInit = {}): Promise<{ status: number; body: any }> {
   const res = await fetch(`${base}${path}`, {
@@ -32,8 +33,10 @@ describe('board API', () => {
     // assertions hold on any machine, even one with the CLIs installed.
     prevCodebuddyBin = process.env.ORCHESTRATOR_CODEBUDDY_BIN;
     prevQoderBin = process.env.ORCHESTRATOR_QODER_BIN;
+    prevPiBin = process.env.ORCHESTRATOR_PI_BIN;
     process.env.ORCHESTRATOR_CODEBUDDY_BIN = '/nonexistent/codebuddy';
     process.env.ORCHESTRATOR_QODER_BIN = '/nonexistent/qoder';
+    process.env.ORCHESTRATOR_PI_BIN = '/nonexistent/pi';
     const dataDir = mkdtempSync(join(tmpdir(), 'orch-board-'));
     store = new Store(join(dataDir, 'db.sqlite'));
     const dispatcher = new Dispatcher(store, new Map(), dataDir);
@@ -60,6 +63,8 @@ describe('board API', () => {
     else process.env.ORCHESTRATOR_CODEBUDDY_BIN = prevCodebuddyBin;
     if (prevQoderBin === undefined) delete process.env.ORCHESTRATOR_QODER_BIN;
     else process.env.ORCHESTRATOR_QODER_BIN = prevQoderBin;
+    if (prevPiBin === undefined) delete process.env.ORCHESTRATOR_PI_BIN;
+    else process.env.ORCHESTRATOR_PI_BIN = prevPiBin;
   });
 
   it('rejects /api/* without a token', async () => {
@@ -116,8 +121,9 @@ describe('board API', () => {
     assert.equal((byId.get('codebuddy') as any).state, 'missing'); // probe pointed at a nonexistent binary in before()
     assert.equal((byId.get('codebuddy') as any).detected, false);
     assert.equal((byId.get('codebuddy') as any).added, false);
-    assert.equal((byId.get('workbuddy') as any).state, 'pending');
-    assert.equal((byId.get('gemini') as any).state, 'not-connected');
+    assert.equal((byId.get('pi') as any).state, 'missing');
+    assert.equal((byId.get('pi') as any).detected, false);
+    assert.match((byId.get('pi') as any).reason, /\.pi\/agent/);
 
     const bad = await api('/api/executors/codebuddy/config', {
       method: 'PUT',
@@ -128,17 +134,64 @@ describe('board API', () => {
     const badDefault = await api('/api/executors/codebuddy/config', {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ models: ['a'], defaultModel: 'b' }),
+      body: JSON.stringify({
+        models: [{ id: 'a', reasoning: 'high', context: '128K' }],
+        defaultModel: 'b',
+      }),
     });
     assert.equal(badDefault.status, 400);
+    const badReasoning = await api('/api/executors/codebuddy/config', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        models: [{ id: 'a', reasoning: 'ultra', context: '128K' }],
+      }),
+    });
+    assert.equal(badReasoning.status, 400);
+    const badContext = await api('/api/executors/codebuddy/config', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        models: [{ id: 'a', reasoning: 'high', context: '999K' }],
+      }),
+    });
+    assert.equal(badContext.status, 400);
+    const badDuplicate = await api('/api/executors/codebuddy/config', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        models: [
+          { id: 'a', reasoning: 'high', context: '128K' },
+          { id: 'a', reasoning: 'low', context: '32K' },
+        ],
+      }),
+    });
+    assert.equal(badDuplicate.status, 400);
     const ok = await api('/api/executors/codebuddy/config', {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ models: ['model-a', 'model-b'], defaultModel: 'model-a', reasoning: 'high' }),
+      body: JSON.stringify({
+        models: [
+          { id: 'model-a', reasoning: 'high', context: '128K' },
+          { id: 'model-b', reasoning: 'low', context: '32K' },
+        ],
+        defaultModel: 'model-a',
+      }),
     });
     assert.equal(ok.status, 200);
     assert.equal(ok.body.config.defaultModel, 'model-a');
-    assert.equal(ok.body.config.reasoning, 'high');
+    assert.deepEqual(ok.body.config.models, [
+      { id: 'model-a', reasoning: 'high', context: '128K' },
+      { id: 'model-b', reasoning: 'low', context: '32K' },
+    ]);
+    // An empty models list is a valid config (the agent just never dispatches).
+    const okEmpty = await api('/api/executors/qoder/config', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ models: [], defaultModel: null }),
+    });
+    assert.equal(okEmpty.status, 200);
+    assert.deepEqual(okEmpty.body.config.models, []);
     // The config write above marks codebuddy as added.
     const afterPut = await api('/api/executors');
     assert.equal(
@@ -154,7 +207,7 @@ describe('board API', () => {
     // with a clear 502 instead of crashing.
     const failed = await api('/api/executors/qoder/models');
     assert.equal(failed.status, 502);
-    assert.match(failed.body.error, /无法获取 Qoder 模型列表/);
+    assert.match(failed.body.error, /未检测到 Qoder/);
     // Point the probe at the fake `qoder --list-models` for one call.
     const prevQoderBin = process.env.ORCHESTRATOR_QODER_BIN;
     process.env.ORCHESTRATOR_QODER_BIN = join(process.cwd(), 'scripts', 'fake-qoder-models.mjs');
