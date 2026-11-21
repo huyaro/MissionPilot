@@ -95,6 +95,30 @@ fn resolve_backend_path(app: AppHandle) -> Option<String> {
     p
 }
 
+/// Find the node binary: PATH first, then the usual macOS install spots.
+/// (An app launched outside a terminal can have a bare PATH; relying on
+/// `Command::new("node")` alone fails silently there.)
+fn resolve_node() -> Option<PathBuf> {
+    if let Ok(path) = std::env::var("PATH") {
+        for dir in path.split(':') {
+            if dir.is_empty() {
+                continue;
+            }
+            let cand = PathBuf::from(dir).join("node");
+            if cand.is_file() {
+                return Some(cand);
+            }
+        }
+    }
+    for cand in ["/opt/homebrew/bin/node", "/usr/local/bin/node"] {
+        let p = PathBuf::from(cand);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    None
+}
+
 #[tauri::command]
 fn start_backend(
     app: AppHandle,
@@ -115,17 +139,33 @@ fn start_backend(
     let js = resolve_backend_js(&app, backend_js)
         .ok_or_else(|| "backend server.js not found (pass its path in the setup screen)".to_string())?;
     eprintln!("[mission-pilot] start_backend: resolved js={}", js.display());
+    let node = resolve_node().ok_or_else(|| {
+        eprintln!("[mission-pilot] start_backend: node not found (searched PATH, /opt/homebrew/bin/node, /usr/local/bin/node)");
+        "node not found (searched PATH, /opt/homebrew/bin/node, /usr/local/bin/node) — install node or start the backend yourself".to_string()
+    })?;
+    eprintln!("[mission-pilot] start_backend: using node={}", node.display());
     let token = fresh_token();
-    let child = Command::new("node")
+    // Keep the backend's stderr so a crash at startup is diagnosable
+    // instead of vanishing into Stdio::null().
+    let err_log = std::env::temp_dir().join("mission-pilot-backend.log");
+    let err_stdio = std::fs::File::create(&err_log)
+        .map(Stdio::from)
+        .unwrap_or_else(|_| Stdio::null());
+    eprintln!("[mission-pilot] start_backend: backend stderr -> {}", err_log.display());
+    let child = Command::new(&node)
         .arg(&js)
         .arg("--http")
         .env("ORCHESTRATOR_TRANSPORT", "http")
         .env("ORCHESTRATOR_MCP_TOKEN", &token)
         .env("ORCHESTRATOR_HTTP_PORT", "8788")
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(err_stdio)
         .spawn()
-        .map_err(|e| format!("failed to spawn node: {e}"))?;
+        .map_err(|e| {
+            eprintln!("[mission-pilot] start_backend: failed to spawn node: {e}");
+            format!("failed to spawn node: {e}")
+        })?;
+    eprintln!("[mission-pilot] start_backend: spawned node pid={}", child.id());
     if let Ok(mut slot) = state.backend_child.lock() {
         *slot = Some(child);
     }
