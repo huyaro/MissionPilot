@@ -24,27 +24,26 @@ export function Scoreboard(props: { api: BoardApi }) {
 
   return (
     <div>
-      <h1>Scoreboard</h1>
+      <h1>记分板</h1>
       <p className="sub">
-        Elo starts at 1200 (K=32). A passing attempt beats the failed attempts on the same task;
-        single-agent tasks have no opponent and do not move Elo.
-        {generatedAt ? ` Generated ${new Date(generatedAt).toLocaleString()}.` : ''}
+        Elo 初始 1200（K=32）。一次通过的尝试会击败同一任务上的失败尝试；单执行者任务没有对手，不改变 Elo。
+        {generatedAt ? ` 生成于 ${new Date(generatedAt).toLocaleString()}。` : ''}
       </p>
       {error && <p className="error">{error}</p>}
       <div className="card">
         {agents.length === 0 ? (
-          <p className="sub">No attempts yet — scores appear after the first verified task.</p>
+          <p className="sub">暂无尝试——首个已验证任务完成后显示分数。</p>
         ) : (
           <table>
             <thead>
               <tr>
-                <th>Agent</th>
+                <th>执行者</th>
                 <th>Elo</th>
-                <th>Success rate</th>
-                <th>Attempts</th>
-                <th>Passed / Failed</th>
-                <th>Avg rounds / task</th>
-                <th>Tokens (in / out)</th>
+                <th>成功率</th>
+                <th>尝试次数</th>
+                <th>通过 / 失败</th>
+                <th>平均轮次 / 任务</th>
+                <th>Token（输入 / 输出）</th>
               </tr>
             </thead>
             <tbody>

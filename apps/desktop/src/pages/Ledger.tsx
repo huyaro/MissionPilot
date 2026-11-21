@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { BoardApi, LedgerEntry, MissionSummary } from '../api';
+import { statusLabel } from '../labels';
 
 export function Ledger(props: { api: BoardApi }) {
   const { api } = props;
@@ -31,30 +32,30 @@ export function Ledger(props: { api: BoardApi }) {
 
   return (
     <div>
-      <h1>Ledger</h1>
+      <h1>账本</h1>
       <p className="sub">
-        Budgets and the hash-chained audit trail.{' '}
+        预算与哈希链审计记录。{' '}
         {chainOk === null ? (
           ''
         ) : chainOk ? (
-          <span className="pill pass">chain verified</span>
+          <span className="pill pass">链已验证</span>
         ) : (
-          <span className="pill fail">chain broken at seq {badSeq}</span>
+          <span className="pill fail">链在序号 {badSeq} 处断裂</span>
         )}
       </p>
       {error && <p className="error">{error}</p>}
       <div className="card">
-        <h2>Budgets</h2>
+        <h2>预算</h2>
         {missions.length === 0 ? (
-          <p className="sub">No missions yet.</p>
+          <p className="sub">暂无任务。</p>
         ) : (
           <table>
             <thead>
               <tr>
-                <th>Mission</th>
-                <th>Status</th>
-                <th>Budget</th>
-                <th>Tasks done</th>
+                <th>任务</th>
+                <th>状态</th>
+                <th>预算</th>
+                <th>已完成任务</th>
               </tr>
             </thead>
             <tbody>
@@ -62,9 +63,9 @@ export function Ledger(props: { api: BoardApi }) {
                 <tr key={m.id}>
                   <td>{m.goal}</td>
                   <td>
-                    <span className={`pill ${m.status}`}>{m.status}</span>
+                    <span className={`pill ${m.status}`}>{statusLabel(m.status)}</span>
                   </td>
-                  <td>{m.budget === null ? '—' : `${m.budget} units`}</td>
+                  <td>{m.budget === null ? '—' : `${m.budget} 单位`}</td>
                   <td>
                     {m.doneTasks}/{m.taskCount}
                   </td>
@@ -75,18 +76,18 @@ export function Ledger(props: { api: BoardApi }) {
         )}
       </div>
       <div className="card">
-        <h2>Audit trail ({entries.length})</h2>
+        <h2>审计记录 ({entries.length})</h2>
         {entries.length === 0 ? (
-          <p className="sub">No ledger entries yet.</p>
+          <p className="sub">暂无账本记录。</p>
         ) : (
           <table>
             <thead>
               <tr>
-                <th>Seq</th>
-                <th>Time</th>
-                <th>Type</th>
-                <th>Detail</th>
-                <th>Hash</th>
+                <th>序号</th>
+                <th>时间</th>
+                <th>类型</th>
+                <th>详情</th>
+                <th>哈希</th>
               </tr>
             </thead>
             <tbody>

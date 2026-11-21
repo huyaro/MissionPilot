@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { Approval, BoardApi } from '../api';
+import { kindLabel, statusLabel } from '../labels';
 
 export function Approvals(props: { api: BoardApi; onChanged: () => void }) {
   const { api, onChanged } = props;
@@ -25,7 +26,7 @@ export function Approvals(props: { api: BoardApi; onChanged: () => void }) {
   const decide = async (id: string, decision: 'approved' | 'rejected') => {
     const r = reason[id] ?? '';
     if (decision === 'rejected' && !r.trim()) {
-      setError('Rejecting requires a reason.');
+      setError('拒绝需要填写理由。');
       return;
     }
     setBusy(id);
@@ -36,7 +37,7 @@ export function Approvals(props: { api: BoardApi; onChanged: () => void }) {
         // Surface the honest push outcome (deferred when no remote exists).
         setError(null);
         if (!result.push.pushed) {
-          setError(`Approved. Push: ${result.push.note}`);
+          setError(`已批准。推送：${result.push.note}`);
         }
       }
       setReason((prev) => ({ ...prev, [id]: '' }));
@@ -51,23 +52,22 @@ export function Approvals(props: { api: BoardApi; onChanged: () => void }) {
 
   return (
     <div>
-      <h1>Approval center</h1>
+      <h1>审批中心</h1>
       <p className="sub">
-        Replan proposals and pushes wait here. Nothing leaves the local loop without your decision
-        (INV-7).
+        重新规划提案与推送在此等候。没有你的决定，任何内容都不会离开本地闭环（INV-7）。
       </p>
       {error && <p className="error">{error}</p>}
       <div className="card">
-        <h2>Pending ({pending.length})</h2>
+        <h2>待审批 ({pending.length})</h2>
         {pending.length === 0 ? (
-          <p className="sub">Nothing waiting for approval.</p>
+          <p className="sub">暂无待审批项。</p>
         ) : (
           <table>
             <thead>
               <tr>
-                <th>Kind</th>
-                <th>Summary</th>
-                <th>Reason (required to reject)</th>
+                <th>类型</th>
+                <th>摘要</th>
+                <th>理由（拒绝必填）</th>
                 <th></th>
               </tr>
             </thead>
@@ -75,13 +75,13 @@ export function Approvals(props: { api: BoardApi; onChanged: () => void }) {
               {pending.map((a) => (
                 <tr key={a.id}>
                   <td>
-                    <span className="pill pending">{a.kind}</span>
+                    <span className="pill pending">{kindLabel(a.kind)}</span>
                   </td>
                   <td>{a.summary}</td>
                   <td>
                     <input
                       value={reason[a.id] ?? ''}
-                      placeholder="reason…"
+                      placeholder="理由…"
                       onChange={(e) => setReason((prev) => ({ ...prev, [a.id]: e.target.value }))}
                       style={{ width: 220 }}
                     />
@@ -93,14 +93,14 @@ export function Approvals(props: { api: BoardApi; onChanged: () => void }) {
                         disabled={busy === a.id}
                         onClick={() => void decide(a.id, 'approved')}
                       >
-                        Approve
+                        批准
                       </button>
                       <button
                         className="btn danger"
                         disabled={busy === a.id}
                         onClick={() => void decide(a.id, 'rejected')}
                       >
-                        Reject
+                        拒绝
                       </button>
                     </div>
                   </td>
@@ -111,27 +111,27 @@ export function Approvals(props: { api: BoardApi; onChanged: () => void }) {
         )}
       </div>
       <div className="card">
-        <h2>History</h2>
+        <h2>历史记录</h2>
         {history.length === 0 ? (
-          <p className="sub">No decisions yet.</p>
+          <p className="sub">暂无决定记录。</p>
         ) : (
           <table>
             <thead>
               <tr>
-                <th>Kind</th>
-                <th>Summary</th>
-                <th>Decision</th>
-                <th>Reason</th>
-                <th>Decided</th>
+                <th>类型</th>
+                <th>摘要</th>
+                <th>决定</th>
+                <th>理由</th>
+                <th>决定时间</th>
               </tr>
             </thead>
             <tbody>
               {history.map((a) => (
                 <tr key={a.id}>
-                  <td>{a.kind}</td>
+                  <td>{kindLabel(a.kind)}</td>
                   <td>{a.summary}</td>
                   <td>
-                    <span className={`pill ${a.status}`}>{a.status}</span>
+                    <span className={`pill ${a.status}`}>{statusLabel(a.status)}</span>
                   </td>
                   <td>{a.reason ?? '—'}</td>
                   <td>{a.decidedAt ? new Date(a.decidedAt).toLocaleString() : '—'}</td>

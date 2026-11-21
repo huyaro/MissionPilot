@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { BoardApi, ExecutorInfo } from '../api';
+import { statusLabel } from '../labels';
 
 const REASONING_LEVELS = ['low', 'medium', 'high'] as const;
 
@@ -53,7 +54,7 @@ export function Connections(props: { api: BoardApi }) {
         defaultModel: edit.defaultModel.trim() || null,
         reasoning: (edit.reasoning || null) as 'low' | 'medium' | 'high' | null,
       });
-      setSaved(`${id} config saved`);
+      setSaved(`${id} 配置已保存`);
       load();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -62,22 +63,22 @@ export function Connections(props: { api: BoardApi }) {
 
   return (
     <div>
-      <h1>Connections</h1>
-      <p className="sub">Brains, tunnel, and executors — and what model each executor should use.</p>
+      <h1>连接</h1>
+      <p className="sub">大脑、隧道与执行者——以及各执行者应使用的模型。</p>
       {error && <p className="error">{error}</p>}
       {saved && <p style={{ color: 'var(--green)' }}>{saved}</p>}
       <div className="card">
-        <h2>Brains</h2>
+        <h2>大脑</h2>
         {data === null ? (
-          <p className="sub">Loading…</p>
+          <p className="sub">加载中…</p>
         ) : (
           <table>
             <thead>
               <tr>
-                <th>Brain</th>
-                <th>Transport</th>
-                <th>Status</th>
-                <th>Note</th>
+                <th>大脑</th>
+                <th>传输方式</th>
+                <th>状态</th>
+                <th>说明</th>
               </tr>
             </thead>
             <tbody>
@@ -88,7 +89,7 @@ export function Connections(props: { api: BoardApi }) {
                   </td>
                   <td>{b.transport}</td>
                   <td>
-                    <span className={`pill ${b.status}`}>{b.status}</span>
+                    <span className={`pill ${b.status}`}>{statusLabel(b.status)}</span>
                   </td>
                   <td>{b.note}</td>
                 </tr>
@@ -98,28 +99,27 @@ export function Connections(props: { api: BoardApi }) {
         )}
       </div>
       <div className="card">
-        <h2>Tunnel</h2>
+        <h2>隧道</h2>
         {data?.tunnel === null || data?.tunnel === undefined ? (
           <p className="sub">
-            Tunnel is disabled. To enable ChatGPT: set ORCHESTRATOR_TUNNEL_ID and
-            ORCHESTRATOR_TUNNEL_API_KEY when starting the backend (see README). The backend
-            manages tunnel-client as a subprocess — start it, watch it, restart it when it dies.
+            隧道未启用。要启用 ChatGPT：启动后端时设置 ORCHESTRATOR_TUNNEL_ID 与
+            ORCHESTRATOR_TUNNEL_API_KEY（见 README）。后端将 tunnel-client 作为子进程管理——启动、看守、挂了重启。
           </p>
         ) : (
           <table>
             <tbody>
               <tr>
-                <td>Tunnel ID</td>
+                <td>隧道 ID</td>
                 <td className="mono">{data.tunnel.tunnelId}</td>
               </tr>
               <tr>
-                <td>State</td>
+                <td>状态</td>
                 <td>
-                  <span className={`pill ${data.tunnel.state}`}>{data.tunnel.state}</span>
+                  <span className={`pill ${data.tunnel.state}`}>{statusLabel(data.tunnel.state)}</span>
                 </td>
               </tr>
               <tr>
-                <td>Health URL</td>
+                <td>健康检查 URL</td>
                 <td className="mono">{data.tunnel.healthUrl ?? '—'}</td>
               </tr>
               <tr>
@@ -127,11 +127,11 @@ export function Connections(props: { api: BoardApi }) {
                 <td>{data.tunnel.pid ?? '—'}</td>
               </tr>
               <tr>
-                <td>Restarts</td>
+                <td>重启次数</td>
                 <td>{data.tunnel.restarts}</td>
               </tr>
               <tr>
-                <td>Last error</td>
+                <td>最近错误</td>
                 <td>{data.tunnel.lastError ?? '—'}</td>
               </tr>
             </tbody>
@@ -139,24 +139,25 @@ export function Connections(props: { api: BoardApi }) {
         )}
       </div>
       <div className="card">
-        <h2>Executors</h2>
+        <h2>执行者</h2>
         <p className="sub">
-          Model and reasoning level are recorded per executor. The CLI adapters do not pass model
-          flags yet — the exact flags are unverified until the Mac pre-flight confirms them.
+          模型与推理等级按执行者记录。CLI 适配器暂不传递模型参数——具体参数需等 Mac 预检确认。
         </p>
         <table>
           <thead>
             <tr>
-              <th>Executor</th>
-              <th>Status</th>
-              <th>Models (comma-separated)</th>
-              <th>Default model</th>
-              <th>Reasoning</th>
+              <th>执行者</th>
+              <th>状态</th>
+              <th>模型（逗号分隔）</th>
+              <th>默认模型</th>
+              <th>推理等级</th>
               <th></th>
             </tr>
           </thead>
           <tbody>
-            {executors.map((e) => {
+            {executors
+              .filter((e) => e.id === 'codebuddy' || e.id === 'qoder')
+              .map((e) => {
               const edit = edits[e.id] ?? { modelsText: '', defaultModel: '', reasoning: '' };
               const editable = e.id === 'codebuddy' || e.id === 'qoder';
               return (
@@ -165,7 +166,7 @@ export function Connections(props: { api: BoardApi }) {
                     <strong>{e.label}</strong>
                   </td>
                   <td>
-                    <span className={`pill ${e.state}`}>{e.state}</span>
+                    <span className={`pill ${e.state}`}>{statusLabel(e.state)}</span>
                   </td>
                   <td>
                     <input
@@ -185,7 +186,7 @@ export function Connections(props: { api: BoardApi }) {
                     <input
                       value={edit.defaultModel}
                       disabled={!editable}
-                      placeholder="default model"
+                      placeholder="默认模型"
                       onChange={(ev) =>
                         setEdits((prev) => ({
                           ...prev,
@@ -217,7 +218,7 @@ export function Connections(props: { api: BoardApi }) {
                   <td>
                     {editable && (
                       <button className="btn secondary" onClick={() => void save(e.id)}>
-                        Save
+                        保存
                       </button>
                     )}
                   </td>
@@ -226,10 +227,6 @@ export function Connections(props: { api: BoardApi }) {
             })}
           </tbody>
         </table>
-        <p className="sub" style={{ marginTop: 12 }}>
-          WorkBuddy is pending (no CLI; the pi route is out of scope for this project). Gemini is
-          not connected — wrapping the consumer CLI is unsupported by its ToS.
-        </p>
       </div>
     </div>
   );

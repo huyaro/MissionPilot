@@ -8,14 +8,16 @@ import { Approvals } from './pages/Approvals';
 import { Scoreboard } from './pages/Scoreboard';
 import { Ledger } from './pages/Ledger';
 import { Connections } from './pages/Connections';
+import { statusLabel } from './labels';
+import brandIcon from './assets/icon.png';
 import './styles.css';
 
 const NAV: { id: string; label: string }[] = [
-  { id: 'overview', label: 'Overview' },
-  { id: 'approvals', label: 'Approval center' },
-  { id: 'scoreboard', label: 'Scoreboard' },
-  { id: 'ledger', label: 'Ledger' },
-  { id: 'connections', label: 'Connections' },
+  { id: 'overview', label: '总览' },
+  { id: 'approvals', label: '审批中心' },
+  { id: 'scoreboard', label: '记分板' },
+  { id: 'ledger', label: '账本' },
+  { id: 'connections', label: '连接' },
 ];
 
 export default function App() {
@@ -146,14 +148,14 @@ export default function App() {
     if (!t) return;
     const ok = await probeHealth();
     if (!ok) {
-      setSetupError('Backend is not reachable on 127.0.0.1:8788. Start it first.');
+      setSetupError('后端在 127.0.0.1:8788 上不可达，请先启动后端。');
       return;
     }
     setToken(t);
   };
 
   if (backendRunning === null || (starting && !token)) {
-    return <p className="sub" style={{ padding: 32 }}>{starting ? 'Starting backend…' : 'Checking backend…'}</p>;
+    return <p className="sub" style={{ padding: 32 }}>{starting ? '正在启动后端…' : '正在检查后端…'}</p>;
   }
 
   if (!backendRunning || !api) {
@@ -162,15 +164,15 @@ export default function App() {
         <div className="card">
           <h1>MissionPilot</h1>
           <p className="sub">
-            The backend is not running on 127.0.0.1:8788. Start it from the app (the app spawns
-            the backend as a managed process), or start it yourself and paste the token.
+            后端未在 127.0.0.1:8788 上运行。请在应用内启动（应用会将后端作为托管进程拉起），或自行启动后粘贴
+            token。
           </p>
           {setupError && <p className="error">{setupError}</p>}
           <div className="form-row">
-            <label>Backend JS (optional)</label>
+            <label>后端 JS（可选）</label>
             <input
               value={backendJs}
-              placeholder="path to dist/src/server.js"
+              placeholder="dist/src/server.js 的路径"
               onChange={(e) => setBackendJs(e.target.value)}
               style={{ flex: 1 }}
             />
@@ -178,19 +180,19 @@ export default function App() {
           {defaultBackendJs !== undefined && (
             <p className="sub">
               {defaultBackendJs ? (
-                <>Leave blank to use: <span className="mono">{defaultBackendJs}</span></>
+                <>留空则使用：<span className="mono">{defaultBackendJs}</span></>
               ) : (
-                'Backend JS not found — run npm run build first, or paste its path above.'
+                '未找到后端 JS——请先运行 npm run build，或在上方粘贴路径。'
               )}
             </p>
           )}
           <div className="btn-row">
             <button className="btn" disabled={starting} onClick={() => void handleStartBackend()}>
-              {starting ? 'Starting…' : 'Start backend'}
+              {starting ? '启动中…' : '启动后端'}
             </button>
           </div>
           <hr style={{ margin: '20px 0', border: 'none', borderTop: '1px solid var(--border)' }} />
-          <p className="sub">Or connect to an already-running backend:</p>
+          <p className="sub">或连接到已在运行的后端：</p>
           <div className="form-row">
             <label>Bearer token</label>
             <input
@@ -203,11 +205,11 @@ export default function App() {
           </div>
           <div className="btn-row">
             <button className="btn secondary" onClick={() => void handleManualToken()}>
-              Connect
+              连接
             </button>
           </div>
           <p className="sub" style={{ marginTop: 16 }}>
-            Manual start:{' '}
+            手动启动：{' '}
             <span className="mono">
               ORCHESTRATOR_TRANSPORT=http ORCHESTRATOR_MCP_TOKEN=&lt;token&gt; node
               dist/src/server.js
@@ -222,7 +224,7 @@ export default function App() {
   return (
     <div className="app">
       <aside className="sidebar">
-        <div className="brand">MissionPilot</div>
+        <div className="brand"><img src={brandIcon} alt="" className="brand-icon" />MissionPilot</div>
         {NAV.map((n) => (
           <button
             key={n.id}
@@ -235,15 +237,15 @@ export default function App() {
         ))}
         <div className="sidebar-section">
           <div className="conn-row">
-            <span>Backend</span>
-            <span className="pill connected">running</span>
+            <span>后端</span>
+            <span className="pill connected">{statusLabel('running')}</span>
           </div>
           <div className="conn-row">
-            <span>Tunnel</span>
-            <span className={`pill ${tunnelState ?? 'disabled'}`}>{tunnelState ?? '—'}</span>
+            <span>隧道</span>
+            <span className={`pill ${tunnelState ?? 'disabled'}`}>{tunnelState ? statusLabel(tunnelState) : '—'}</span>
           </div>
           <div className="conn-row">
-            <span>Pending approvals</span>
+            <span>待审批</span>
             <span>{pendingCount}</span>
           </div>
         </div>

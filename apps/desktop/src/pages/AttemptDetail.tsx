@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { BoardApi } from '../api';
+import { statusLabel } from '../labels';
 
 export function AttemptDetail(props: { api: BoardApi; attemptId: string }) {
   const { api, attemptId } = props;
@@ -18,7 +19,7 @@ export function AttemptDetail(props: { api: BoardApi; attemptId: string }) {
   }, [api, attemptId]);
 
   if (error) return <p className="error">{error}</p>;
-  if (!data) return <p className="sub">Loading attempt…</p>;
+  if (!data) return <p className="sub">正在加载尝试…</p>;
   const { attempt, events, worktree, evidence } = data;
   const diff = (() => {
     if (!attempt.diffSummary) return null;
@@ -36,19 +37,19 @@ export function AttemptDetail(props: { api: BoardApi; attemptId: string }) {
   return (
     <div>
       <h1>
-        Attempt · {attempt.agent}
+        尝试 · {attempt.agent}
       </h1>
       <p className="sub">
-        <span className={`pill ${attempt.status}`}>{attempt.status}</span>{' '}
+        <span className={`pill ${attempt.status}`}>{statusLabel(attempt.status)}</span>{' '}
         <span className="mono">{attempt.id}</span>
-        {attempt.exitCode !== null ? ` · exit ${attempt.exitCode}` : ''}
+        {attempt.exitCode !== null ? ` · 退出码 ${attempt.exitCode}` : ''}
         {worktree ? ` · worktree ${worktree.path}` : ''}
       </p>
       <div className="two-col">
         <div className="card">
-          <h2>Event stream ({events.length})</h2>
+          <h2>事件流 ({events.length})</h2>
           {events.length === 0 ? (
-            <p className="sub">No events recorded yet.</p>
+            <p className="sub">暂无事件记录。</p>
           ) : (
             <div className="event-list">
               {events.map((e) => (
@@ -71,22 +72,22 @@ export function AttemptDetail(props: { api: BoardApi; attemptId: string }) {
         </div>
         <div>
           <div className="card">
-            <h2>Diff</h2>
+            <h2>差异</h2>
             {diff ? (
               <>
                 <div>
-                  {diff.filesChanged} files · +{diff.insertions} / −{diff.deletions}
+                  {diff.filesChanged} 个文件 · +{diff.insertions} / −{diff.deletions}
                 </div>
                 <pre>{diff.files.join('\n')}</pre>
               </>
             ) : (
-              <p className="sub">No diff recorded (empty diff or attempt not finished).</p>
+              <p className="sub">未记录差异（差异为空或尝试未完成）。</p>
             )}
           </div>
           <div className="card">
-            <h2>Verification evidence</h2>
+            <h2>验证证据</h2>
             {evidence === null ? (
-              <p className="sub">Not verified yet.</p>
+              <p className="sub">尚未验证。</p>
             ) : (
               <pre>{JSON.stringify(evidence, null, 2)}</pre>
             )}

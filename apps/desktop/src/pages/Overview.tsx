@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { BoardApi, BoardEventMsg, MissionSummary } from '../api';
+import { statusLabel } from '../labels';
 
 export type NavTarget = { page: string; missionId?: string; attemptId?: string };
 
@@ -36,40 +37,40 @@ export function Overview(props: {
   const failedTasks = missions.reduce((sum, m) => sum + m.failedTasks, 0);
   return (
     <div>
-      <h1>Overview</h1>
-      <p className="sub">Missions, live activity, and what needs your decision.</p>
+      <h1>总览</h1>
+      <p className="sub">任务、实时动态，以及需要你决定的事项。</p>
       {error && <p className="error">{error}</p>}
       <div className="grid">
         <div className="kpi">
-          <div className="label">Active missions</div>
+          <div className="label">进行中的任务</div>
           <div className="value">{active.length}</div>
         </div>
         <div className="kpi">
-          <div className="label">Missions total</div>
+          <div className="label">任务总数</div>
           <div className="value">{missions.length}</div>
         </div>
         <div className="kpi">
-          <div className="label">Pending approvals</div>
+          <div className="label">待审批</div>
           <div className="value">{pendingApprovals}</div>
         </div>
         <div className="kpi">
-          <div className="label">Failed tasks</div>
+          <div className="label">失败任务</div>
           <div className="value">{failedTasks}</div>
         </div>
       </div>
       <div className="two-col">
         <div className="card">
-          <h2>Missions</h2>
+          <h2>任务</h2>
           {missions.length === 0 ? (
-            <p className="sub">No missions yet. Dispatch one from Codex or ChatGPT.</p>
+            <p className="sub">暂无任务。从 Codex 或 ChatGPT 派发一个。</p>
           ) : (
             <table>
               <thead>
                 <tr>
-                  <th>Goal</th>
-                  <th>Status</th>
-                  <th>Tasks</th>
-                  <th>Source</th>
+                  <th>目标</th>
+                  <th>状态</th>
+                  <th>任务</th>
+                  <th>来源</th>
                 </tr>
               </thead>
               <tbody>
@@ -81,11 +82,11 @@ export function Overview(props: {
                   >
                     <td>{m.goal}</td>
                     <td>
-                      <span className={statusPill(m.status)}>{m.status}</span>
+                      <span className={statusPill(m.status)}>{statusLabel(m.status)}</span>
                     </td>
                     <td>
                       {m.doneTasks}/{m.taskCount}
-                      {m.failedTasks > 0 ? ` (${m.failedTasks} failed)` : ''}
+                      {m.failedTasks > 0 ? ` （${m.failedTasks} 个失败）` : ''}
                     </td>
                     <td>{m.source}</td>
                   </tr>
@@ -95,9 +96,9 @@ export function Overview(props: {
           )}
         </div>
         <div className="card">
-          <h2>Live activity</h2>
+          <h2>实时动态</h2>
           {events.length === 0 ? (
-            <p className="sub">Waiting for backend events (SSE)…</p>
+            <p className="sub">等待后端事件（SSE）…</p>
           ) : (
             <div className="event-list">
               {events.slice(0, 12).map((e, i) => (
