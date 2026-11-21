@@ -2,7 +2,8 @@
 // - stdio (default): Codex local use.
 // - HTTP (--http or ORCHESTRATOR_TRANSPORT=http): Streamable HTTP on
 //   127.0.0.1 for ChatGPT via tunnel-client; bearer auth required.
-//   With ORCHESTRATOR_TUNNEL_ID set, tunnel-client is managed alongside.
+//   The tunnel is configured only from the Settings UI (tunnel ID +
+//   API key held in backend memory); no env-var config for it.
 // Stdout is the MCP channel in stdio mode — all logging goes to stderr (see log.ts).
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { Store, resolveDataDir, resolveDbPath } from './store.js';
@@ -105,8 +106,8 @@ async function main(): Promise<void> {
       store,
       getTunnelStatus: () => tunnel?.status() ?? null,
       getTunnelConfig: () => ({
-        tunnelId: tunnel?.status().tunnelId ?? process.env.ORCHESTRATOR_TUNNEL_ID ?? null,
-        apiKeySet: tunnel !== null || Boolean(process.env.ORCHESTRATOR_TUNNEL_API_KEY),
+        tunnelId: tunnel?.status().tunnelId ?? null,
+        apiKeySet: tunnel !== null,
       }),
       startTunnel: applyTunnelConfig,
       stopTunnel,
@@ -116,22 +117,12 @@ async function main(): Promise<void> {
     actualPort = await http.listen();
     scheduler.start(tick);
 
-    const tunnelId = process.env.ORCHESTRATOR_TUNNEL_ID;
-    if (tunnelId) {
-      const apiKey = process.env.ORCHESTRATOR_TUNNEL_API_KEY;
-      if (!apiKey) {
-        log('warn', 'ORCHESTRATOR_TUNNEL_ID is set but ORCHESTRATOR_TUNNEL_API_KEY is missing; tunnel not started');
-      } else {
-        startTunnel(tunnelId, apiKey);
-      }
-    }
     log('info', 'local-agents MCP server started (http)', {
       dataDir,
       recovered,
       tickMs: tick,
       port: actualPort,
       readOnly,
-      tunnel: tunnel ? tunnelId : null,
     });
     const shutdown = (): void => {
       scheduler.stop();

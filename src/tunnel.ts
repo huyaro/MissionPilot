@@ -62,8 +62,8 @@ export class TunnelManager {
   private healthUrlFile: string;
 
   constructor(opts: TunnelOptions) {
-    if (!opts.tunnelId) throw new Error('tunnel needs a tunnel id (ORCHESTRATOR_TUNNEL_ID)');
-    if (!opts.apiKey) throw new Error('tunnel needs an API key (ORCHESTRATOR_TUNNEL_API_KEY)');
+    if (!opts.tunnelId) throw new Error('tunnel needs a tunnel id');
+    if (!opts.apiKey) throw new Error('tunnel needs an API key');
     this.opts = opts;
     this.healthUrlFile = join(opts.dataDir, 'tunnel-health.url');
   }

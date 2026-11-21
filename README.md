@@ -38,16 +38,14 @@ HTTP 只绑 127.0.0.1；远程接入只走官方 tunnel，不开公网端口。
 
 前置（Platform/ChatGPT 里手动做一次）：建 tunnel、配 Tunnels Read+Use 的
 restricted key、在 ChatGPT 里添加自定义 MCP 服务器（Connection: Tunnel，
-填 tunnel_id）。然后在桌面看板「设置」页的隧道区填 Tunnel ID 与 API key，点「启动隧道」
-应用配置并（重）启 tunnel-client，再点「测试连接」验证通道是否通。后端把 key
-只放内存（不落盘、不记日志、不回显）。环境变量仍可用作后备默认值：
+填 tunnel_id）。然后在桌面看板「设置」页的隧道区填 Tunnel ID 与 API 密钥，点「启动隧道」
+应用配置并（重）启 tunnel-client；启动成功后按钮会变成「停止隧道」。后端把 key
+只放内存（不落盘、不记日志、不回显，重启后端后需重新填写）。隧道不再支持环境变量配置。
 
 ```sh
 # macOS 安装：brew install openai/tools/tunnel-client
 ORCHESTRATOR_TRANSPORT=http \
 ORCHESTRATOR_MCP_TOKEN=<bearer token> \
-ORCHESTRATOR_TUNNEL_ID=tunnel_... \
-ORCHESTRATOR_TUNNEL_API_KEY=<restricted key> \
 node dist/src/server.js
 ```
 

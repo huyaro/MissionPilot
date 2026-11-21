@@ -313,11 +313,6 @@ export function Connections(props: { api: BoardApi }) {
           )}
           {tunnelError && <span className="error">{tunnelError}</span>}
         </div>
-        <p className="sub">
-          点「启动隧道」应用配置并启动 tunnel-client；启动成功后，按钮会变成「停止隧道」。API
-          密钥只保存在后端内存中，不会显示、不会落盘、不会记日志；重启后端后需要重新填写。也可以继续用环境变量
-          ORCHESTRATOR_TUNNEL_ID / ORCHESTRATOR_TUNNEL_API_KEY 启动后端，界面上填写的值会覆盖它。
-        </p>
       </div>
     </div>
   );

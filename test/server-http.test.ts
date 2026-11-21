@@ -24,8 +24,6 @@ describe('server entry (--http + tunnel)', () => {
         ORCHESTRATOR_MCP_TOKEN: 'entry-test-token',
         ORCHESTRATOR_HTTP_PORT: '0',
         ORCHESTRATOR_TICK_MS: '60000',
-        ORCHESTRATOR_TUNNEL_ID: 'tunnel_test',
-        ORCHESTRATOR_TUNNEL_API_KEY: 'test-key',
         ORCHESTRATOR_TUNNEL_BIN: fakeTunnelBin,
       },
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -53,6 +51,21 @@ describe('server entry (--http + tunnel)', () => {
       const body = (await health.json()) as { ok: boolean; mode: string };
       assert.equal(body.ok, true);
       assert.equal(body.mode, 'full');
+      // Tunnel config comes only from the Settings UI path now (no env
+      // config): apply it over HTTP and confirm the tunnel comes up.
+      const configRes = await fetch(`http://127.0.0.1:${port}/api/tunnel/config`, {
+        method: 'POST',
+        headers: {
+          authorization: 'Bearer entry-test-token',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ tunnelId: 'tunnel_test', apiKey: 'test-key' }),
+      });
+      assert.equal(configRes.status, 200);
+      const configBody = (await configRes.json()) as {
+        tunnel: { tunnelId: string; state: string };
+      };
+      assert.equal(configBody.tunnel.tunnelId, 'tunnel_test');
       // Tunnel manager: wait for the healthy log line.
       const healthyDeadline = Date.now() + 15_000;
       let healthy = false;
