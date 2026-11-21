@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { AgentScore, BoardApi } from '../api';
 
-// Scoreboard as a card (used by the merged 记分板与账本 page). Keeps its
+// Scoreboard as a card (used by the merged 记账本 page). Keeps its
 // own data fetching; the page title lives in the parent page.
 export function ScoreboardCard(props: { api: BoardApi }) {
   const { api } = props;

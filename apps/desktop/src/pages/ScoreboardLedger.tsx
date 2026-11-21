@@ -8,7 +8,7 @@ export function ScoreboardLedger(props: { api: BoardApi }) {
   const { api } = props;
   return (
     <div>
-      <h1>记分板与账本</h1>
+      <h1>记账本</h1>
       <p className="sub">上面是执行者记分板，下面是预算与哈希链审计记录。</p>
       <ScoreboardCard api={api} />
       <LedgerCard api={api} />

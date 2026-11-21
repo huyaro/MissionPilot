@@ -31,7 +31,7 @@ const NAV: { id: string; label: string; icon: ReactNode }[] = [
     icon: <Icon><circle cx="12" cy="12" r="9" /><path d="m8.5 12.5 2.5 2.5 5-5.5" /></Icon>,
   },
   {
-    id: 'scoreboard', label: '记分板与账本',
+    id: 'scoreboard', label: '记账本',
     icon: <Icon><path d="M4 20V10" /><path d="M10 20V4" /><path d="M16 20v-7" /><path d="M2 20h20" /></Icon>,
   },
   {

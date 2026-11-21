@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import type { BoardApi, LedgerEntry, MissionSummary } from '../api';
 import { statusLabel } from '../labels';
 
-// Ledger as a card (used by the merged 记分板与账本 page). Keeps its own
+// Ledger as a card (used by the merged 记账本 page). Keeps its own
 // data fetching; the page title lives in the parent page.
 export function LedgerCard(props: { api: BoardApi }) {
   const { api } = props;
