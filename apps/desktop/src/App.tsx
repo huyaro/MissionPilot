@@ -171,7 +171,10 @@ export default function App() {
         .catch(() => undefined);
     };
     loadCounts();
-    const timer = setInterval(loadCounts, 10_000);
+    // Poll is only a backstop for backend-driven changes (tunnel dying
+    // or reconnecting on its own); actions refresh immediately via
+    // sidebarTick (see onChanged below).
+    const timer = setInterval(loadCounts, 2_000);
     return () => {
       close?.();
       clearInterval(timer);
@@ -360,7 +363,7 @@ export default function App() {
           {page === 'attempt' && nav.attemptId && <AttemptDetail api={api} attemptId={nav.attemptId} />}
           {page === 'approvals' && <Approvals api={api} onChanged={() => setSidebarTick((t) => t + 1)} />}
           {page === 'scoreboard' && <ScoreboardLedger api={api} />}
-          {page === 'connections' && <Connections api={api} />}
+          {page === 'connections' && <Connections api={api} onChanged={() => setSidebarTick((t) => t + 1)} />}
         </main>
       </div>
     </div>

@@ -4,13 +4,14 @@ import { statusLabel } from '../labels';
 
 const REASONING_LEVELS = ['low', 'medium', 'high'] as const;
 
-export function Connections(props: { api: BoardApi }) {
-  const { api } = props;
+export function Connections(props: { api: BoardApi; onChanged?: () => void }) {
+  const { api, onChanged } = props;
   const [data, setData] = useState<Awaited<ReturnType<BoardApi['connections']>> | null>(null);
   const [executors, setExecutors] = useState<ExecutorInfo[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
-  // Tunnel config (Settings UI): key is held in backend memory only.
+  // Tunnel config (Settings UI): the key is persisted to the saved
+  // tunnel config on the backend; the input is never prefilled with it.
   const [tunnelId, setTunnelId] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [starting, setStarting] = useState(false);
@@ -97,6 +98,9 @@ export function Connections(props: { api: BoardApi }) {
         setTunnelError(r.tunnel.lastError ?? '隧道启动失败，请检查 Tunnel ID 与 API key 是否正确。');
       }
       load();
+      // Refresh the sidebar pill immediately — it used to wait for the
+      // next 10s poll, which is the lag the user saw.
+      onChanged?.();
     } catch (e) {
       setTunnelError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -110,6 +114,7 @@ export function Connections(props: { api: BoardApi }) {
     try {
       await api.stopTunnel();
       load();
+      onChanged?.();
     } catch (e) {
       setTunnelError(e instanceof Error ? e.message : String(e));
     } finally {
