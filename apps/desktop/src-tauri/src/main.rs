@@ -25,8 +25,15 @@ struct AppState {
 
 fn fresh_token() -> String {
     // 16 bytes from /dev/urandom, hex-encoded. No extra crates.
-    let bytes = fs::read("/dev/urandom").unwrap_or_else(|_| vec![0u8; 16]);
-    bytes.iter().take(16).map(|b| format!("{b:02x}")).collect()
+    // NOTE: read exactly 16 bytes with read_exact — fs::read() would loop
+    // forever here because /dev/urandom never signals EOF, so the backend
+    // was never spawned (macOS verify run #3 hung after "using node=").
+    use std::io::Read;
+    let mut buf = [0u8; 16];
+    if let Ok(mut f) = fs::File::open("/dev/urandom") {
+        let _ = f.read_exact(&mut buf);
+    }
+    buf.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 fn backend_listening() -> bool {
