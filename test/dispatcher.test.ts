@@ -275,4 +275,61 @@ describe('dispatcher', () => {
       store.close();
     }
   });
+
+  it('pickAgent skips disabled executors', () => {
+    const store = new Store(tempDbPath());
+    try {
+      const dispatcher = new Dispatcher(
+        store,
+        new Map([
+          ['codebuddy', codebuddyAdapter],
+          ['qoder', { name: 'qoder', run: async () => ({ exitCode: 0, signal: null, stderr: '' }) }],
+        ]),
+        mkdtempSync(join(tmpdir(), 'orch-dispatch-')),
+      );
+      store.upsertExecutorConfig('qoder', {
+        models: [{ id: 'auto', reasoning: 'high', context: '128K' }],
+        defaultModel: 'auto',
+        enabled: false,
+      });
+      store.upsertExecutorConfig('codebuddy', {
+        models: [{ id: 'hy3', reasoning: 'high', context: '128K' }],
+        defaultModel: 'hy3',
+      });
+      assert.equal(dispatcher.pickAgent(['codebuddy', 'qoder']), 'codebuddy');
+      store.upsertExecutorConfig('codebuddy', { enabled: false });
+      assert.equal(dispatcher.pickAgent(['codebuddy', 'qoder']), null);
+      store.upsertExecutorConfig('qoder', { enabled: true });
+      assert.equal(dispatcher.pickAgent(['codebuddy', 'qoder']), 'qoder');
+    } finally {
+      store.close();
+    }
+  });
+
+  it('dispatch to a disabled agent fails closed with a disabled error', async () => {
+    const store = new Store(tempDbPath());
+    try {
+      store.upsertExecutorConfig('codebuddy', {
+        models: [{ id: 'hy3', reasoning: 'high', context: '128K' }],
+        defaultModel: 'hy3',
+        enabled: false,
+      });
+      const dispatcher = new Dispatcher(
+        store,
+        new Map([['codebuddy', codebuddyAdapter]]),
+        mkdtempSync(join(tmpdir(), 'orch-dispatch-')),
+      );
+      await assert.rejects(
+        dispatcher.dispatch({
+          agent: 'codebuddy',
+          task: { title: 'Create hello', prompt: 'create hello.ts' },
+          contract: 'hello.ts exists',
+          workdir: '/tmp/does-not-matter',
+        }),
+        /is disabled/,
+      );
+    } finally {
+      store.close();
+    }
+  });
 });

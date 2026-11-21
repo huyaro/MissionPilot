@@ -153,3 +153,66 @@ describe('store migration v4 -> v5', () => {
     }
   });
 });
+
+// Schema v5 -> v6 migration: executor_config gains an `enabled` column;
+// existing rows default to enabled so already-configured executors keep
+// dispatching.
+const V5_EXECUTOR_CONFIG_SCHEMA = `
+CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE executor_config (
+  agent TEXT PRIMARY KEY,
+  models TEXT NOT NULL DEFAULT '[]',
+  default_model TEXT,
+  updated_at TEXT NOT NULL
+);
+`;
+
+function makeV5Db(path: string): void {
+  mkdirSync(dirname(path), { recursive: true });
+  const db = new DatabaseSync(path);
+  db.exec(V5_EXECUTOR_CONFIG_SCHEMA);
+  db.prepare("INSERT INTO meta (key, value) VALUES ('schema_version', '5')").run();
+  const now = new Date().toISOString();
+  db.prepare(
+    "INSERT INTO executor_config (agent, models, default_model, updated_at) VALUES ('codebuddy', ?, 'hy3', ?)",
+  ).run(JSON.stringify([{ id: 'hy3', reasoning: 'high', context: '128K' }]), now);
+  db.close();
+}
+
+describe('store migration v5 -> v6', () => {
+  it('adds the enabled column defaulting existing rows to enabled', () => {
+    const dbPath = tempDbPath();
+    makeV5Db(dbPath);
+    const store = new Store(dbPath);
+    try {
+      // A v5 row reads as enabled; the column exists with default 1.
+      assert.equal(store.getExecutorConfig('codebuddy')?.enabled, true);
+      const probe = new DatabaseSync(dbPath);
+      try {
+        const cols = (
+          probe.prepare('PRAGMA table_info(executor_config)').all() as Array<{ name: string }>
+        ).map((c) => c.name);
+        assert.ok(cols.includes('enabled'));
+      } finally {
+        probe.close();
+      }
+      // Toggling persists, and a models-only patch preserves it.
+      const off = store.upsertExecutorConfig('codebuddy', { enabled: false });
+      assert.equal(off.enabled, false);
+      assert.deepEqual(off.models, [{ id: 'hy3', reasoning: 'high', context: '128K' }]);
+      assert.equal(store.getExecutorConfig('codebuddy')?.enabled, false);
+      const kept = store.upsertExecutorConfig('codebuddy', {
+        models: [{ id: 'hy3', reasoning: 'low', context: '64K' }],
+      });
+      assert.equal(kept.enabled, false);
+      // New rows default to enabled.
+      const q = store.upsertExecutorConfig('qoder', {
+        models: [{ id: 'auto', reasoning: 'high', context: '128K' }],
+        defaultModel: 'auto',
+      });
+      assert.equal(q.enabled, true);
+    } finally {
+      store.close();
+    }
+  });
+});

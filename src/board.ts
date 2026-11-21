@@ -280,6 +280,11 @@ export function createBoardHandler(deps: BoardDeps) {
           json(res, 400, { error: 'defaultModel must be one of models' });
           return true;
         }
+        const enabled = body.enabled;
+        if (enabled !== undefined && typeof enabled !== 'boolean') {
+          json(res, 400, { error: 'enabled must be a boolean' });
+          return true;
+        }
         // The models array IS the enabled set: dispatch only ever uses a
         // model from it (see dispatcher.resolveDispatchModel). The CLI
         // adapters receive the chosen model via verified flags only
@@ -288,6 +293,7 @@ export function createBoardHandler(deps: BoardDeps) {
         const config = store.upsertExecutorConfig(agent, {
           models: parsedModels,
           defaultModel: (defaultModel as string | null | undefined) ?? undefined,
+          enabled: (enabled as boolean | undefined) ?? undefined,
         });
         json(res, 200, { config });
         return true;

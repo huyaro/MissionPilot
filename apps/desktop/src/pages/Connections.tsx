@@ -27,9 +27,11 @@ export function Connections(props: { api: BoardApi; onChanged?: () => void }) {
   // Tunnel start/stop failure, shown inline next to the button.
   const [tunnelError, setTunnelError] = useState<string | null>(null);
   // Local edits per executor: the configured model list (the array IS the
-  // enabled set) + the default model. Never typed — models come from the
-  // agent's own list mechanism.
-  const [edits, setEdits] = useState<Record<string, { models: ConfigModel[]; defaultModel: string | null }>>({});
+  // enabled set) + the default model + the enable/disable toggle. Never
+  // typed — models come from the agent's own list mechanism.
+  const [edits, setEdits] = useState<
+    Record<string, { models: ConfigModel[]; defaultModel: string | null; enabled: boolean }>
+  >({});
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // Model chosen in the bottom dropdown ('' = none chosen yet).
   const [dropdownModel, setDropdownModel] = useState('');
@@ -39,7 +41,6 @@ export function Connections(props: { api: BoardApi; onChanged?: () => void }) {
     | { status: 'ready'; models: string[]; source: string }
     | { status: 'error'; error: string };
   const [modelsState, setModelsState] = useState<Record<string, ModelsState>>({});
-  const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
 
   const fetchModels = (id: string, force = false) => {
@@ -85,11 +86,16 @@ export function Connections(props: { api: BoardApi; onChanged?: () => void }) {
       .executors(refresh)
       .then((r) => {
         setExecutors(r.executors);
-        const next: Record<string, { models: ConfigModel[]; defaultModel: string | null }> = {};
+        const next: Record<
+          string,
+          { models: ConfigModel[]; defaultModel: string | null; enabled: boolean }
+        > = {};
         for (const e of r.executors) {
           next[e.id] = {
             models: e.config?.models ?? [],
             defaultModel: e.config?.defaultModel ?? null,
+            // Rows predating the flag read as enabled.
+            enabled: e.config?.enabled ?? true,
           };
         }
         setEdits(next);
@@ -125,18 +131,17 @@ export function Connections(props: { api: BoardApi; onChanged?: () => void }) {
   const selectExecutor = (id: string) => {
     setSelectedId(id);
     setDropdownModel('');
-    setConfirmRemove(null);
     fetchModels(id);
   };
 
   const addModel = (agentId: string, modelId: string) => {
     setEdits((prev) => {
-      const cur = prev[agentId] ?? { models: [], defaultModel: null };
+      const cur = prev[agentId] ?? { models: [], defaultModel: null, enabled: true };
       if (cur.models.some((m) => m.id === modelId)) return prev;
       const models = [...cur.models, { id: modelId, reasoning: 'high' as const, context: '128K' }];
       return {
         ...prev,
-        [agentId]: { models, defaultModel: cur.defaultModel ?? modelId },
+        [agentId]: { ...cur, models, defaultModel: cur.defaultModel ?? modelId },
       };
     });
   };
@@ -163,7 +168,7 @@ export function Connections(props: { api: BoardApi; onChanged?: () => void }) {
       // Deleting the default falls back to the first remaining model.
       const defaultModel =
         cur.defaultModel === modelId ? (models[0]?.id ?? null) : cur.defaultModel;
-      return { ...prev, [agentId]: { models, defaultModel } };
+      return { ...prev, [agentId]: { ...cur, models, defaultModel } };
     });
   };
 
@@ -177,6 +182,7 @@ export function Connections(props: { api: BoardApi; onChanged?: () => void }) {
       await api.saveExecutorConfig(id, {
         models: edit.models,
         defaultModel: edit.defaultModel,
+        enabled: edit.enabled,
       });
       setSaved(`${id} 配置已保存`);
       load();
@@ -187,23 +193,28 @@ export function Connections(props: { api: BoardApi; onChanged?: () => void }) {
     }
   };
 
-  const removeExecutor = async (id: string) => {
-    // Two-step confirm: first click arms, second click removes.
-    if (confirmRemove !== id) {
-      setConfirmRemove(id);
-      return;
-    }
-    setConfirmRemove(null);
+  // Flip the enable/disable toggle and persist it immediately. The config
+  // is built explicitly from the current edit state (no pending setState),
+  // and the list marker + detail update from the saved response — other
+  // agents' unsaved edits are left alone (no full reload).
+  const toggleEnabled = async (id: string) => {
+    const edit = edits[id];
+    const ex = executors.find((e) => e.id === id);
+    if (!edit || !ex?.config) return;
+    const next = { models: edit.models, defaultModel: edit.defaultModel, enabled: !edit.enabled };
+    setError(null);
+    setSaved(null);
     setBusyId(id);
     try {
-      await api.removeExecutorConfig(id);
-      setSaved(`${id} 已移除，可随时重新配置`);
-      setModelsState((prev) => {
-        const next = { ...prev };
-        delete next[id];
-        return next;
-      });
-      load();
+      const r = await api.saveExecutorConfig(id, next);
+      setExecutors((prev) =>
+        prev.map((e) => (e.id === id && e.config ? { ...e, config: r.config } : e)),
+      );
+      setEdits((prev) => ({
+        ...prev,
+        [id]: { models: r.config.models, defaultModel: r.config.defaultModel, enabled: r.config.enabled },
+      }));
+      setSaved(`${id} 已${r.config.enabled ? '启用' : '禁用'}`);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -270,7 +281,9 @@ export function Connections(props: { api: BoardApi; onChanged?: () => void }) {
     (apiKey.trim() !== '' || (data?.tunnelConfig?.apiKeySet ?? false));
 
   const selected = executors.find((e) => e.id === selectedId) ?? null;
-  const selectedEdit = selected ? (edits[selected.id] ?? { models: [], defaultModel: null }) : null;
+  const selectedEdit = selected
+    ? (edits[selected.id] ?? { models: [], defaultModel: null, enabled: true })
+    : null;
   const selectedModels = selected ? modelsState[selected.id] : undefined;
   // Fetched models not yet added — the pool the bottom dropdown draws from.
   const unaddedModels =
@@ -278,13 +291,18 @@ export function Connections(props: { api: BoardApi; onChanged?: () => void }) {
       ? selectedModels.models.filter((m) => !selectedEdit.models.some((cm) => cm.id === m))
       : [];
 
-  const scopeLine = (edit: { models: ConfigModel[]; defaultModel: string | null }): string => {
+  const scopeLine = (edit: {
+    models: ConfigModel[];
+    defaultModel: string | null;
+    enabled: boolean;
+  }): string => {
     if (edit.models.length === 0) return '未添加任何模型，该 agent 不会参与派发。';
     const parts = edit.models.map(
       (m) =>
         `${m.id}（${REASONING_LABELS[m.reasoning]} · ${m.context}${m.id === edit.defaultModel ? '，默认' : ''}）`,
     );
-    return `派发时仅使用：${parts.join('、')}`;
+    const line = `派发时仅使用：${parts.join('、')}`;
+    return edit.enabled ? line : `${line}（已禁用，不参与派发）`;
   };
 
   return (
@@ -365,7 +383,7 @@ export function Connections(props: { api: BoardApi; onChanged?: () => void }) {
                     key={e.id}
                     onClick={() => selectExecutor(e.id)}
                     style={{
-                      padding: '10px 12px',
+                      padding: '8px 12px',
                       borderRadius: 8,
                       cursor: 'pointer',
                       background:
@@ -378,22 +396,50 @@ export function Connections(props: { api: BoardApi; onChanged?: () => void }) {
                     }}
                   >
                     <div
-                      style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        gap: 8,
+                      }}
                     >
-                      <strong>{e.label}</strong>
-                      <span style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                        {e.added && <span className="sub">已配置</span>}
+                      <span
+                        style={{
+                          display: 'flex',
+                          gap: 6,
+                          alignItems: 'baseline',
+                          minWidth: 0,
+                        }}
+                      >
+                        <strong>{e.label}</strong>
+                        {e.version && (
+                          <span
+                            className="sub"
+                            style={{
+                              margin: 0,
+                              whiteSpace: 'nowrap',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                            }}
+                          >
+                            {e.version}
+                          </span>
+                        )}
+                      </span>
+                      <span style={{ display: 'flex', gap: 6, alignItems: 'center', flex: 'none' }}>
+                        {e.config?.enabled ? (
+                          <span className="sub" style={{ margin: 0, lineHeight: 1.5 }}>
+                            已启用
+                          </span>
+                        ) : e.added ? (
+                          <span className="sub" style={{ margin: 0, lineHeight: 1.5 }}>
+                            已配置
+                          </span>
+                        ) : null}
                         <span className={`pill ${e.detected ? 'connected' : 'missing'}`}>
                           {e.detected ? '已检测到' : '未检测到'}
                         </span>
                       </span>
-                    </div>
-                    <div className="sub" style={{ marginTop: 4, wordBreak: 'break-all' }}>
-                      {e.detected && e.signal
-                        ? e.signal.kind === 'binary'
-                          ? `二进制 ${e.signal.value}`
-                          : `配置目录 ${e.signal.value}`
-                        : e.reason}
                     </div>
                   </div>
                 ))}
@@ -416,22 +462,21 @@ export function Connections(props: { api: BoardApi; onChanged?: () => void }) {
                         {selected.detected ? '已检测到' : '未检测到'}
                       </span>
                     </h2>
-                    <p className="sub" style={{ margin: '0 0 4px', overflowWrap: 'break-word' }}>
-                      {selected.version ? `版本 ${selected.version}` : '版本未知'}
-                      {selected.detected && selected.signal
-                        ? selected.signal.kind === 'binary'
-                          ? ` · 二进制 ${selected.signal.value}`
-                          : ` · 配置目录 ${selected.signal.value}`
-                        : ''}
-                    </p>
+                    {selected.detected && selected.signal && (
+                      <p className="sub" style={{ margin: '0 0 4px', overflowWrap: 'break-word' }}>
+                        {selected.signal.kind === 'binary'
+                          ? `二进制 ${selected.signal.value}`
+                          : `配置目录 ${selected.signal.value}`}
+                      </p>
+                    )}
                   </div>
                   {selected.added && (
                     <button
                       className="btn secondary"
                       disabled={busyId === selected.id}
-                      onClick={() => void removeExecutor(selected.id)}
+                      onClick={() => void toggleEnabled(selected.id)}
                     >
-                      {confirmRemove === selected.id ? '确认移除？' : '移除'}
+                      {selectedEdit.enabled ? '禁用' : '启用'}
                     </button>
                   )}
                 </div>

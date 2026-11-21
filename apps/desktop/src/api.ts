@@ -128,6 +128,8 @@ export interface ExecutorInfo {
     /** The models array IS the enabled set (dispatch only uses these). */
     models: ConfigModel[];
     defaultModel: string | null;
+    /** False = never dispatched to (config preserved). Rows predating the flag read as enabled. */
+    enabled: boolean;
     updatedAt: string;
   } | null;
 }
@@ -246,7 +248,7 @@ export class BoardApi {
 
   async saveExecutorConfig(
     agent: string,
-    config: { models?: ConfigModel[]; defaultModel?: string | null },
+    config: { models?: ConfigModel[]; defaultModel?: string | null; enabled?: boolean },
   ): Promise<{ config: NonNullable<ExecutorInfo['config']> }> {
     return this.req(`/api/executors/${agent}/config`, {
       method: 'PUT',

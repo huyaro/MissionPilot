@@ -161,10 +161,10 @@ export function contextLabelToTokens(label: string): number | null {
   }
 }
 
-/** The model a dispatch to `agent` must use, or null when it has none configured. */
+/** The model a dispatch to `agent` must use, or null when it has none configured. A disabled executor never resolves (its config is preserved, it just never dispatches). */
 export function resolveDispatchModel(store: Store, agent: string): ConfigModel | null {
   const config = store.getExecutorConfig(agent);
-  if (!config || config.models.length === 0) return null;
+  if (!config || !config.enabled || config.models.length === 0) return null;
   if (config.defaultModel) {
     const found = config.models.find((m) => m.id === config.defaultModel);
     if (found) return found;

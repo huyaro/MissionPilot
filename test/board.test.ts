@@ -184,6 +184,38 @@ describe('board API', () => {
       { id: 'model-a', reasoning: 'high', context: '128K' },
       { id: 'model-b', reasoning: 'low', context: '32K' },
     ]);
+    // A fresh write defaults to enabled; the flag validates, persists,
+    // and an enabled-only patch preserves the models.
+    assert.equal(ok.body.config.enabled, true);
+    const badEnabled = await api('/api/executors/codebuddy/config', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled: 'yes' }),
+    });
+    assert.equal(badEnabled.status, 400);
+    const disabled = await api('/api/executors/codebuddy/config', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled: false }),
+    });
+    assert.equal(disabled.status, 200);
+    assert.equal(disabled.body.config.enabled, false);
+    assert.deepEqual(disabled.body.config.models, [
+      { id: 'model-a', reasoning: 'high', context: '128K' },
+      { id: 'model-b', reasoning: 'low', context: '32K' },
+    ]);
+    const listed = await api('/api/executors');
+    assert.equal(
+      (listed.body.executors.find((e: any) => e.id === 'codebuddy') as any).config.enabled,
+      false,
+    );
+    const reenabled = await api('/api/executors/codebuddy/config', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled: true }),
+    });
+    assert.equal(reenabled.status, 200);
+    assert.equal(reenabled.body.config.enabled, true);
     // An empty models list is a valid config (the agent just never dispatches).
     const okEmpty = await api('/api/executors/qoder/config', {
       method: 'PUT',

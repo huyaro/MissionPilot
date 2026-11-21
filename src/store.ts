@@ -7,7 +7,7 @@ import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 
 export type MissionStatus =
   | 'created'
@@ -150,12 +150,15 @@ export interface ConfigModel {
  * P3 executor config, set from the board. The models array IS the enabled
  * set: a model not in the array is never used for dispatch. defaultModel
  * must be one of the array entries; when the default is deleted it falls
- * back to the first model in the array.
+ * back to the first model in the array. `enabled` gates dispatch: a
+ * disabled executor is never dispatched to (its config is preserved).
+ * Rows written before the v6 `enabled` column default to enabled.
  */
 export interface ExecutorConfig {
   agent: string;
   models: ConfigModel[];
   defaultModel: string | null;
+  enabled: boolean;
   updatedAt: string;
 }
 
@@ -314,6 +317,7 @@ CREATE TABLE IF NOT EXISTS executor_config (
   agent TEXT PRIMARY KEY,
   models TEXT NOT NULL DEFAULT '[]',
   default_model TEXT,
+  enabled INTEGER NOT NULL DEFAULT 1,
   updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_tasks_mission ON tasks(mission_id);
@@ -421,6 +425,11 @@ export class Store {
       if (cols.has('reasoning')) {
         this.db.exec('ALTER TABLE executor_config DROP COLUMN reasoning');
       }
+    }
+    if (version < 6) {
+      // Enable/disable toggle: a new column, existing rows default to
+      // enabled (1) so already-configured executors keep dispatching.
+      addCol('executor_config', 'enabled', 'INTEGER NOT NULL DEFAULT 1');
     }
     if (version < SCHEMA_VERSION) {
       this.db
@@ -837,7 +846,7 @@ export class Store {
   // -- executor config (P3) ---------------------------------------------------
   upsertExecutorConfig(
     agent: string,
-    patch: { models?: ConfigModel[]; defaultModel?: string | null },
+    patch: { models?: ConfigModel[]; defaultModel?: string | null; enabled?: boolean },
   ): ExecutorConfig {
     const cur = this.getExecutorConfig(agent);
     const models = patch.models ?? cur?.models ?? [];
@@ -846,12 +855,15 @@ export class Store {
     // The default must be in the list; if it was deleted, fall back to the
     // first model (or null when the list is empty).
     defaultModel = normalizeDefaultModel(models, defaultModel);
-    const next: ExecutorConfig = { agent, models, defaultModel, updatedAt: nowIso() };
+    // A patch that omits `enabled` preserves the stored value; new rows
+    // default to enabled.
+    const enabled = patch.enabled ?? cur?.enabled ?? true;
+    const next: ExecutorConfig = { agent, models, defaultModel, enabled, updatedAt: nowIso() };
     this.db
       .prepare(
-        'INSERT INTO executor_config (agent, models, default_model, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(agent) DO UPDATE SET models = excluded.models, default_model = excluded.default_model, updated_at = excluded.updated_at',
+        'INSERT INTO executor_config (agent, models, default_model, enabled, updated_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(agent) DO UPDATE SET models = excluded.models, default_model = excluded.default_model, enabled = excluded.enabled, updated_at = excluded.updated_at',
       )
-      .run(agent, JSON.stringify(next.models), next.defaultModel, next.updatedAt);
+      .run(agent, JSON.stringify(next.models), next.defaultModel, next.enabled ? 1 : 0, next.updatedAt);
     return next;
   }
 
@@ -875,6 +887,8 @@ export class Store {
         models,
         row.default_model === null ? null : String(row.default_model),
       ),
+      // Rows predating the v6 `enabled` column read as enabled.
+      enabled: row.enabled === undefined || row.enabled === null ? true : Number(row.enabled) === 1,
       updatedAt: String(row.updated_at),
     };
   }

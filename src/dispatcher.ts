@@ -60,7 +60,7 @@ export class Dispatcher {
 
   /**
    * First agent in `preferred` that can actually run: it has an adapter
-   * AND at least one configured model. Null when none can.
+   * AND is enabled AND has at least one configured model. Null when none can.
    */
   pickAgent(preferred: string[]): string | null {
     for (const agent of preferred) {
@@ -73,9 +73,14 @@ export class Dispatcher {
   /**
    * The model a dispatch to `agent` must use. Fail-closed: an agent with
    * no configured model is never dispatched (the CLI default is not a
-   * substitute for the user's chosen range).
+   * substitute for the user's chosen range). A disabled agent fails with
+   * its own error so the caller can tell it apart from unconfigured.
    */
   private resolveModel(agent: string): ConfigModel {
+    const config = this.store.getExecutorConfig(agent);
+    if (config && !config.enabled) {
+      throw new Error(`${agent} is disabled; enable it in Settings first`);
+    }
     const model = resolveDispatchModel(this.store, agent);
     if (!model) {
       throw new Error(`${agent} has no configured models; add models in Settings first`);
