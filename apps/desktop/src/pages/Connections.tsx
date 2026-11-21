@@ -291,20 +291,6 @@ export function Connections(props: { api: BoardApi; onChanged?: () => void }) {
       ? selectedModels.models.filter((m) => !selectedEdit.models.some((cm) => cm.id === m))
       : [];
 
-  const scopeLine = (edit: {
-    models: ConfigModel[];
-    defaultModel: string | null;
-    enabled: boolean;
-  }): string => {
-    if (edit.models.length === 0) return '未添加任何模型，该 agent 不会参与派发。';
-    const parts = edit.models.map(
-      (m) =>
-        `${m.id}（${REASONING_LABELS[m.reasoning]} · ${m.context}${m.id === edit.defaultModel ? '，默认' : ''}）`,
-    );
-    const line = `派发时仅使用：${parts.join('、')}`;
-    return edit.enabled ? line : `${line}（已禁用，不参与派发）`;
-  };
-
   return (
     <div>
       <h1>设置</h1>
@@ -465,7 +451,7 @@ export function Connections(props: { api: BoardApi; onChanged?: () => void }) {
                     {selected.detected && selected.signal && (
                       <p className="sub" style={{ margin: '0 0 4px', overflowWrap: 'break-word' }}>
                         {selected.signal.kind === 'binary'
-                          ? `二进制 ${selected.signal.value}`
+                          ? `路径 ${selected.signal.value}`
                           : `配置目录 ${selected.signal.value}`}
                       </p>
                     )}
@@ -517,9 +503,6 @@ export function Connections(props: { api: BoardApi; onChanged?: () => void }) {
                     ) : (
                       <>
                         <h3 style={{ margin: '18px 0 8px' }}>模型与派发范围</h3>
-                        <p className="sub" style={{ marginTop: 0, overflowWrap: 'break-word' }}>
-                          来源：{selectedModels.source}
-                        </p>
                         {selectedEdit.models.length === 0 ? (
                           <p className="sub">尚未添加模型，从下方下拉框选择添加。</p>
                         ) : (
@@ -595,9 +578,6 @@ export function Connections(props: { api: BoardApi; onChanged?: () => void }) {
                             </tbody>
                           </table>
                         )}
-                        <p className="sub" style={{ marginTop: 16, overflowWrap: 'break-word' }}>
-                          {scopeLine(selectedEdit)}
-                        </p>
                         <div style={{ display: 'flex', gap: 8, margin: '12px 0' }}>
                           <select
                             value={dropdownModel}
