@@ -1,0 +1,84 @@
+name: macOS verify
+
+# Manual trigger only: macOS minutes cost 10x, so this never runs on
+# push/PR. Run it from the Actions tab when a desktop change is ready
+# to be verified end to end (build + launch + screenshot of the main
+# screen). Expected wall clock: 3-5 minutes.
+on:
+  workflow_dispatch:
+
+jobs:
+  macos-launch:
+    name: Build, launch, screenshot
+    runs-on: macos-14
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            apps/desktop/package-lock.json
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+
+      - name: Install backend dependencies
+        run: npm ci
+
+      - name: Build backend
+        run: npm run build
+
+      - name: Install desktop dependencies
+        working-directory: apps/desktop
+        run: npm ci
+
+      - name: Build desktop frontend
+        working-directory: apps/desktop
+        run: npm run build
+
+      # Debug binary only, no .app/.dmg bundling: the production-path
+      # launch is what needs verifying, and bundling costs minutes.
+      - name: Build Tauri app (debug)
+        working-directory: apps/desktop/src-tauri
+        run: cargo build
+
+      - name: Launch app and wait for backend health
+        run: |
+          ./apps/desktop/src-tauri/target/debug/mission-pilot-board > app.log 2>&1 &
+          echo $! > app.pid
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8788/health > /dev/null 2>&1; then
+              echo "backend healthy after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "backend did not become healthy within 30s"
+          cat app.log
+          exit 1
+
+      - name: Collect backend log
+        if: always()
+        run: |
+          f=$(find "${TMPDIR:-/tmp}" -name mission-pilot-backend.log -print -quit 2>/dev/null || true)
+          if [ -n "$f" ]; then cp "$f" backend.log; echo "found $f"; else echo "no backend log found"; fi
+
+      - name: Screenshot
+        if: always()
+        run: screencapture -x screenshot.png
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-verify-evidence
+          path: |
+            screenshot.png
+            app.log
+            backend.log
+          if-no-files-found: warn
