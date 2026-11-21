@@ -1,14 +1,15 @@
 // Executor detection + model listing tests — Qoder --list-models parsing,
-// CodeBuddy live list + models.json fallback, Pi list + models.json
+// CodeBuddy product-config list + models.json merge, Pi list + models.json
 // fallback, detection/added flags, failure modes.
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Store } from '../src/store.js';
 import {
   clearDetectionCache,
+  listCodebuddyModels,
   listExecutorModels,
   listExecutors,
   parseCodebuddyModelsFile,
@@ -165,25 +166,43 @@ describe('listExecutorModels', () => {
       }),
       'utf8',
     );
-    const result = await listExecutorModels('codebuddy', { codebuddyModelsPath: path });
+    const result = await listExecutorModels('codebuddy', {
+      codebuddyModelsPath: path,
+      codebuddyHomeDir: dir,
+      codebuddyBinPath: null,
+      codebuddyProductConfigPath: join(dir, 'no-such-spill.json'),
+    });
     assert.deepEqual(result.models, ['deepseek-v4-pro']);
     assert.equal(result.source, '~/.codebuddy/models.json');
   });
 
-  it('fails clearly when the codebuddy models file is missing, pointing at /model', async () => {
+  it('fails clearly when no product config and no models.json exist', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'orch-cb-home-'));
     await assert.rejects(
-      () => listExecutorModels('codebuddy', { codebuddyModelsPath: '/nonexistent/models.json' }),
-      /未找到.*models\.json.*\/model 查看/,
+      () =>
+        listExecutorModels('codebuddy', {
+          codebuddyModelsPath: '/nonexistent/models.json',
+          codebuddyHomeDir: dir,
+          codebuddyBinPath: null,
+          codebuddyProductConfigPath: join(dir, 'no-such-spill.json'),
+        }),
+      /未找到产品配置.*\/model 查看/,
     );
   });
 
-  it('fails clearly when models.json holds no models, pointing at /model', async () => {
+  it('fails clearly when models.json holds no models and no product config exists', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'orch-cb-models-'));
     const path = join(dir, 'models.json');
     writeFileSync(path, JSON.stringify({ models: [] }), 'utf8');
     await assert.rejects(
-      () => listExecutorModels('codebuddy', { codebuddyModelsPath: path }),
-      /没有可用模型.*\/model 查看/,
+      () =>
+        listExecutorModels('codebuddy', {
+          codebuddyModelsPath: path,
+          codebuddyHomeDir: dir,
+          codebuddyBinPath: null,
+          codebuddyProductConfigPath: join(dir, 'no-such-spill.json'),
+        }),
+      /未找到产品配置.*\/model 查看/,
     );
   });
 
@@ -232,6 +251,202 @@ describe('listExecutorModels', () => {
 
   it('rejects unknown executors', async () => {
     await assert.rejects(() => listExecutorModels('nope'), /unknown executor/);
+  });
+});
+
+describe('listCodebuddyModels (product config)', () => {
+  // Hermetic fixture home: no product config unless the test adds one.
+  // baseOpts points the spill at a nonexistent file and skips the
+  // bundled lookup (binPath null) unless a test overrides them.
+  function baseOpts(home: string): {
+    homeDir: string;
+    binPath: string | null;
+    productConfigPath: string;
+  } {
+    return {
+      homeDir: home,
+      binPath: null,
+      productConfigPath: join(home, 'no-such-spill.json'),
+    };
+  }
+
+  function writeJson(path: string, value: unknown): string {
+    writeFileSync(path, JSON.stringify(value), 'utf8');
+    return path;
+  }
+
+  it('prefers ACC_PRODUCT_CONFIG_PATH over the local_storage cache', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'orch-cb-home-'));
+    const lsDir = join(home, '.codebuddy', 'local_storage');
+    mkdirSync(lsDir, { recursive: true });
+    writeJson(join(lsDir, 'a.info'), [{ data: { models: [{ id: 'info-model' }] } }]);
+    const spill = writeJson(join(home, 'spill.json'), {
+      models: [{ id: 'spill-model' }],
+      agents: [{ name: 'cli', models: ['spill-model'] }],
+    });
+    const result = await listCodebuddyModels({ ...baseOpts(home), productConfigPath: spill });
+    assert.deepEqual(
+      result.models.map((m) => m.id),
+      ['spill-model'],
+    );
+    assert.equal(result.source, '~/spill.json');
+  });
+
+  it('picks the newest local_storage *.info cache and skips invalid entries', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'orch-cb-home-'));
+    const lsDir = join(home, '.codebuddy', 'local_storage');
+    mkdirSync(lsDir, { recursive: true });
+    const oldInfo = writeJson(join(lsDir, 'old.info'), [
+      { data: { models: [{ id: 'old-model' }] } },
+    ]);
+    const newInfo = writeJson(join(lsDir, 'new.info'), [
+      { data: { models: [{ id: 'new-model' }] } },
+    ]);
+    // Invalid entries with NEWER mtimes must not win: not JSON, and an
+    // empty models array.
+    const badInfo = join(lsDir, 'bad.info');
+    writeFileSync(badInfo, '{not json', 'utf8');
+    const emptyInfo = writeJson(join(lsDir, 'empty.info'), [{ data: { models: [] } }]);
+    utimesSync(oldInfo, new Date(1_000_000_000_000), new Date(1_000_000_000_000));
+    utimesSync(newInfo, new Date(2_000_000_000_000), new Date(2_000_000_000_000));
+    utimesSync(emptyInfo, new Date(2_500_000_000_000), new Date(2_500_000_000_000));
+    utimesSync(badInfo, new Date(3_000_000_000_000), new Date(3_000_000_000_000));
+    const result = await listCodebuddyModels(baseOpts(home));
+    assert.deepEqual(
+      result.models.map((m) => m.id),
+      ['new-model'],
+    );
+    assert.match(result.source, /local_storage\/new\.info$/);
+  });
+
+  it('falls back to the bundled product.json next to the binary', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'orch-cb-home-'));
+    const pkg = mkdtempSync(join(tmpdir(), 'orch-cb-pkg-'));
+    const binDir = join(pkg, 'bin');
+    mkdirSync(binDir, { recursive: true });
+    const bin = join(binDir, 'codebuddy');
+    writeFileSync(bin, '#!/usr/bin/env node\n', 'utf8');
+    writeJson(join(pkg, 'product.json'), {
+      models: [{ id: 'bundled-1' }, { id: 'bundled-2' }],
+      agents: [{ name: 'cli', models: ['bundled-1'] }],
+    });
+    const result = await listCodebuddyModels({ ...baseOpts(home), binPath: bin });
+    assert.deepEqual(
+      result.models.map((m) => m.id),
+      ['bundled-1'],
+    );
+    assert.equal(result.source, join(pkg, 'product.json'));
+  });
+
+  it('filters built-ins to the cli whitelist but always keeps custom models', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'orch-cb-home-'));
+    const spill = writeJson(join(home, 'spill.json'), {
+      models: [{ id: 'a' }, { id: 'b' }, { id: 'c' }],
+      agents: [
+        { name: 'cli', models: ['a'] },
+        { name: 'other', models: ['b'] },
+      ],
+    });
+    const userPath = writeJson(join(home, 'models.json'), { models: [{ id: 'd' }] });
+    const result = await listCodebuddyModels({
+      ...baseOpts(home),
+      productConfigPath: spill,
+      codebuddyModelsPath: userPath,
+    });
+    assert.deepEqual(
+      result.models.map((m) => m.id),
+      ['a', 'd'],
+    );
+  });
+
+  it('SmartMerges: same id fully replaces, new id appends, no duplicates', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'orch-cb-home-'));
+    const spill = writeJson(join(home, 'spill.json'), {
+      models: [
+        { id: 'a', name: 'A-builtin' },
+        { id: 'b', name: 'B' },
+      ],
+      agents: [{ name: 'cli', models: ['a', 'b'] }],
+    });
+    const userPath = writeJson(join(home, 'models.json'), {
+      models: [
+        { id: 'a', name: 'A-custom' },
+        { id: 'c', name: 'C' },
+      ],
+    });
+    const result = await listCodebuddyModels({
+      ...baseOpts(home),
+      productConfigPath: spill,
+      codebuddyModelsPath: userPath,
+    });
+    assert.deepEqual(
+      result.models.map((m) => m.id),
+      ['a', 'b', 'c'],
+    );
+    assert.equal(
+      result.models.find((m) => m.id === 'a')?.name,
+      'A-custom',
+    );
+  });
+
+  it('project availableModels fully overrides user-level', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'orch-cb-home-'));
+    const spill = writeJson(join(home, 'spill.json'), {
+      models: [{ id: 'a' }, { id: 'b' }],
+      agents: [{ name: 'cli', models: ['a', 'b'] }],
+    });
+    const userPath = writeJson(join(home, 'models.json'), {
+      models: [],
+      availableModels: ['a', 'b'],
+    });
+    const proj = mkdtempSync(join(tmpdir(), 'orch-cb-proj-'));
+    mkdirSync(join(proj, '.codebuddy'), { recursive: true });
+    writeJson(join(proj, '.codebuddy', 'models.json'), {
+      models: [],
+      availableModels: ['b'],
+    });
+    const result = await listCodebuddyModels({
+      ...baseOpts(home),
+      productConfigPath: spill,
+      codebuddyModelsPath: userPath,
+      projectDir: proj,
+    });
+    assert.deepEqual(
+      result.models.map((m) => m.id),
+      ['b'],
+    );
+  });
+
+  it('an empty availableModels does not filter; no whitelist means no filtering', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'orch-cb-home-'));
+    const spill = writeJson(join(home, 'spill.json'), {
+      models: [{ id: 'a' }, { id: 'b' }],
+    });
+    const userPath = writeJson(join(home, 'models.json'), {
+      models: [],
+      availableModels: [],
+    });
+    const result = await listCodebuddyModels({
+      ...baseOpts(home),
+      productConfigPath: spill,
+      codebuddyModelsPath: userPath,
+    });
+    assert.deepEqual(
+      result.models.map((m) => m.id),
+      ['a', 'b'],
+    );
+  });
+
+  it('fails clearly when no product config and no models.json exist', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'orch-cb-home-'));
+    await assert.rejects(
+      () =>
+        listCodebuddyModels({
+          ...baseOpts(home),
+          codebuddyModelsPath: join(home, 'no-models.json'),
+        }),
+      /未找到产品配置.*\/model 查看/,
+    );
   });
 });
 

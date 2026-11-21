@@ -23,12 +23,20 @@
 //   is a built-in interactive command and the agent refuses to run it on
 //   behalf of a caller. --acp mode has no model-listing method either
 //   (checked: cli-reference.md's "Prompt and model" table documents only
-//   --model; no ACP material in the research notes). So the only source
-//   is ~/.codebuddy/models.json — which holds CUSTOM models only (a
-//   missing file is normal; built-in models come from the logged-in
-//   account). PTY-driving the interactive CLI is deferred until the user
-//   shares `ls ~/.codebuddy/`. Never hardcode the Token Plan catalogue
-//   (auto / glm-5.2 / deepseek-v4 / ...) — it is account/plan dependent.
+//   --model; no ACP material in the research notes). Instead the list is
+//   read statically from the product config — a TypeScript port of the
+//   user's list-codebuddy-models.mjs (the script itself is NOT in this
+//   repo): ACC_PRODUCT_CONFIG_PATH, else the newest
+//   ~/.codebuddy/local_storage/*.info cache ([0].data.models), else the
+//   bundled <package>/product.json next to the resolved binary. Built-in
+//   models are filtered to the agents[name=cli].models whitelist (what
+//   /model and --model enumerate); ~/.codebuddy/models.json (user) and
+//   <project>/.codebuddy/models.json (project) layers SmartMerge on top —
+//   same id fully replaces, new id appends; project availableModels fully
+//   overrides user-level. The project layer is omitted in production:
+//   the backend has no project workspace (its cwd is not a CodeBuddy
+//   project). Never hardcode the Token Plan catalogue (auto / glm-5.2 /
+//   deepseek-v4 / ...) — it is account/plan dependent.
 // - pi: `pi --list-models` first; it is not confirmed to exist, so on
 //   failure fall back to ~/.pi/agent/models.json
 //   (providers.<provider>.models[] with id/name/...).
@@ -42,9 +50,9 @@
 // through a login shell (`zsh -l -c 'command -v <bin>'`) first, falling
 // back to plain `which`; spawns always use the resolved absolute path, so
 // they never depend on the backend's own PATH.
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { ConfigModel, ExecutorConfig, Store } from './store.js';
@@ -418,6 +426,240 @@ export function parseCodebuddyModelsFile(text: string): string[] {
   return [];
 }
 
+// -- CodeBuddy product-config model listing ----------------------------------
+// TypeScript port of the user's list-codebuddy-models.mjs (the script
+// itself is NOT in this repo): built-in models come from the product
+// config, custom models from the two models.json layers, merged with
+// SmartMerge (same id fully replaces, new id appends).
+
+/** One CodeBuddy model definition, with the metadata the product config carries. */
+export interface CodebuddyModelRecord {
+  id: string;
+  name?: string;
+  vendor?: string;
+  supportsReasoning?: boolean;
+  supportsToolCall?: boolean;
+  maxInputTokens?: number;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+/** Extract model records from a `models` array (objects, or plain id strings). */
+export function codebuddyModelRecords(value: unknown): CodebuddyModelRecord[] {
+  if (!Array.isArray(value)) return [];
+  const records: CodebuddyModelRecord[] = [];
+  for (const entry of value) {
+    if (typeof entry === 'string') {
+      if (entry.trim() !== '') records.push({ id: entry });
+      continue;
+    }
+    const record = asRecord(entry);
+    if (!record) continue;
+    const id = record.id;
+    if (typeof id !== 'string' || id.trim() === '') continue;
+    const out: CodebuddyModelRecord = { id };
+    if (typeof record.name === 'string') out.name = record.name;
+    if (typeof record.vendor === 'string') out.vendor = record.vendor;
+    if (typeof record.supportsReasoning === 'boolean') out.supportsReasoning = record.supportsReasoning;
+    if (typeof record.supportsToolCall === 'boolean') out.supportsToolCall = record.supportsToolCall;
+    if (typeof record.maxInputTokens === 'number') out.maxInputTokens = record.maxInputTokens;
+    records.push(out);
+  }
+  return records;
+}
+
+export interface CodebuddyModelLayer {
+  name: 'builtin' | 'user' | 'project';
+  data: Record<string, unknown> | null;
+}
+
+/**
+ * SmartMerge the builtin (product config) + user + project layers, then
+ * apply the cli-agent whitelist and the availableModels filter — the
+ * reference script's algorithm, with one fix: the script can emit a
+ * duplicate id when a custom model overrides a whitelisted builtin id
+ * (it appears in both the whitelist and the custom set); the port
+ * dedupes, whitelist position wins.
+ */
+export function mergeCodebuddyModelLayers(layers: CodebuddyModelLayer[]): CodebuddyModelRecord[] {
+  let merged: CodebuddyModelRecord[] = [];
+  let available: unknown = null;
+  const customIds = new Set<string>();
+  for (const layer of layers) {
+    if (!layer.data) continue;
+    for (const model of codebuddyModelRecords(layer.data.models)) {
+      if (layer.name !== 'builtin') customIds.add(model.id);
+      const i = merged.findIndex((x) => x.id === model.id);
+      if (i >= 0) merged[i] = model;
+      else merged.push(model);
+    }
+    if (layer.name !== 'builtin' && 'availableModels' in layer.data) {
+      available = layer.data.availableModels;
+    }
+  }
+  // Built-in models are visible only through the cli agent whitelist;
+  // custom models (user/project layers) are always visible.
+  const builtin = layers.find((l) => l.name === 'builtin')?.data ?? null;
+  const agents = builtin?.agents;
+  const cliAgent = Array.isArray(agents)
+    ? agents.find((a) => asRecord(a)?.name === 'cli')
+    : undefined;
+  const visible = idsFromModelsArray(asRecord(cliAgent)?.models);
+  let shown = merged;
+  if (visible.length > 0) {
+    const byId = new Map(shown.map((m) => [m.id, m]));
+    const seen = new Set<string>();
+    shown = [];
+    for (const id of [...visible, ...customIds]) {
+      const model = byId.get(id);
+      if (model && !seen.has(id)) {
+        seen.add(id);
+        shown.push(model);
+      }
+    }
+  }
+  if (Array.isArray(available) && available.length > 0) {
+    const allowed = new Set(idsFromModelsArray(available));
+    shown = shown.filter((m) => allowed.has(m.id));
+  }
+  return shown;
+}
+
+/** Read and parse a JSON file; null when missing or invalid. */
+function readJsonFile(path: string): unknown {
+  try {
+    return JSON.parse(readFileSync(path, 'utf8')) as unknown;
+  } catch {
+    return null;
+  }
+}
+
+export interface CodebuddyProductConfig {
+  file: string;
+  data: Record<string, unknown>;
+}
+
+/**
+ * Resolve the CodeBuddy product config, in priority order: the
+ * ACC_PRODUCT_CONFIG_PATH spill file (must parse and have `.models`),
+ * the newest ~/.codebuddy/local_storage/*.info cache whose
+ * [0].data.models is non-empty, the bundled product.json next to the
+ * resolved binary. Returns null when none yields a config.
+ */
+export function resolveCodebuddyProductConfig(opts: {
+  binPath: string | null;
+  productConfigPath?: string;
+  homeDir?: string;
+}): CodebuddyProductConfig | null {
+  const home = opts.homeDir ?? homedir();
+  // (a) Host-injected spill file.
+  const spill = opts.productConfigPath ?? process.env.ACC_PRODUCT_CONFIG_PATH;
+  if (spill) {
+    const data = asRecord(readJsonFile(spill));
+    if (data && Array.isArray(data.models)) return { file: spill, data };
+  }
+  // (b) Newest local_storage *.info cache.
+  const dir = join(home, '.codebuddy', 'local_storage');
+  try {
+    let best: { file: string; data: Record<string, unknown>; mtime: number } | null = null;
+    for (const name of readdirSync(dir)) {
+      if (!name.endsWith('.info')) continue;
+      const file = join(dir, name);
+      const parsed = readJsonFile(file);
+      const record = asRecord(Array.isArray(parsed) ? asRecord(parsed[0])?.data : undefined);
+      if (!record || !Array.isArray(record.models) || record.models.length === 0) continue;
+      let mtime = 0;
+      try {
+        mtime = statSync(file).mtimeMs;
+      } catch {
+        continue;
+      }
+      if (!best || mtime > best.mtime) best = { file, data: record, mtime };
+    }
+    if (best) return { file: best.file, data: best.data };
+  } catch {
+    // No local_storage dir — fall through to the bundled config.
+  }
+  // (c) Bundled product.json next to the resolved binary.
+  if (opts.binPath) {
+    try {
+      const pkg = dirname(dirname(realpathSync(opts.binPath)));
+      const file = join(pkg, 'product.json');
+      const data = asRecord(readJsonFile(file));
+      if (data) return { file, data };
+    } catch {
+      // No bundled config.
+    }
+  }
+  return null;
+}
+
+export interface ListCodebuddyModelsOptions {
+  /** Resolved codebuddy binary path; undefined = auto-resolve, null = skip bundled lookup. */
+  binPath?: string | null;
+  /** Override for ACC_PRODUCT_CONFIG_PATH. */
+  productConfigPath?: string;
+  /** Home dir override (local_storage cache + default user models.json). */
+  homeDir?: string;
+  /** User-layer models.json override. */
+  codebuddyModelsPath?: string;
+  /** Project workspace root; null/undefined = omit the project layer. */
+  projectDir?: string | null;
+}
+
+export interface CodebuddyModelsResult {
+  models: CodebuddyModelRecord[];
+  /** Where the list came from, shown in the UI. */
+  source: string;
+}
+
+/** Shorten an absolute path under home to ~/... for display. */
+function displayPath(file: string, home: string): string {
+  return file.startsWith(`${home}/`) ? `~${file.slice(home.length)}` : file;
+}
+
+/**
+ * List CodeBuddy models from the product config + models.json layers
+ * (see the module comment). The project layer is omitted unless a
+ * projectDir is given — in production the backend has no project
+ * workspace, so only the builtin + user layers apply. Throws a
+ * user-facing error when nothing yields a model list.
+ */
+export async function listCodebuddyModels(
+  opts: ListCodebuddyModelsOptions = {},
+): Promise<CodebuddyModelsResult> {
+  const home = opts.homeDir ?? homedir();
+  const bin = opts.binPath === undefined ? await resolveExecutorBin('codebuddy') : opts.binPath;
+  const product = resolveCodebuddyProductConfig({
+    binPath: bin,
+    productConfigPath: opts.productConfigPath,
+    homeDir: home,
+  });
+  const userPath =
+    opts.codebuddyModelsPath ??
+    (opts.homeDir ? join(home, '.codebuddy', 'models.json') : codebuddyModelsPath());
+  const userData = asRecord(readJsonFile(userPath));
+  const projectData = opts.projectDir
+    ? asRecord(readJsonFile(join(opts.projectDir, '.codebuddy', 'models.json')))
+    : null;
+  const models = mergeCodebuddyModelLayers([
+    { name: 'builtin', data: product?.data ?? null },
+    { name: 'user', data: userData },
+    { name: 'project', data: projectData },
+  ]);
+  if (models.length === 0) {
+    throw new Error(
+      'CodeBuddy 模型列表获取失败：未找到产品配置（ACC_PRODUCT_CONFIG_PATH、local_storage 缓存或包内 product.json），也没有 ~/.codebuddy/models.json 自定义模型。内置模型请在 CodeBuddy 交互会话里用 /model 查看。',
+    );
+  }
+  const source = product ? displayPath(product.file, home) : '~/.codebuddy/models.json';
+  return { models, source };
+}
+
 /**
  * Parse a Pi models.json file. Custom providers/models are keyed by
  * provider: providers.<provider>.models[] with id/name/.... Top-level
@@ -482,30 +724,33 @@ export interface ExecutorModels {
  */
 export async function listExecutorModels(
   id: string,
-  opts: { codebuddyModelsPath?: string; piModelsPath?: string } = {},
+  opts: {
+    codebuddyModelsPath?: string;
+    piModelsPath?: string;
+    /** Home dir override for the CodeBuddy product-config lookup. */
+    codebuddyHomeDir?: string;
+    /** Override for ACC_PRODUCT_CONFIG_PATH. */
+    codebuddyProductConfigPath?: string;
+    /** Resolved CodeBuddy binary override (null = skip bundled lookup). */
+    codebuddyBinPath?: string | null;
+    /** Project workspace root for the project models.json layer. */
+    codebuddyProjectDir?: string | null;
+  } = {},
 ): Promise<ExecutorModels> {
   if (!isKnownExecutor(id)) throw new Error(`unknown executor: ${id}`);
 
   if (id === 'codebuddy') {
-    // Only the models.json file (see the module comment): it holds custom
-    // models only — a missing file is normal, and built-in models come
-    // from the logged-in account, so the error points at /model.
-    const path = opts.codebuddyModelsPath ?? codebuddyModelsPath();
-    let text: string;
-    try {
-      text = readFileSync(path, 'utf8');
-    } catch {
-      throw new Error(
-        'CodeBuddy 模型列表获取失败：未找到 ~/.codebuddy/models.json（该文件只存自定义模型，不存在是正常的）。内置模型请在 CodeBuddy 交互会话里用 /model 查看。',
-      );
-    }
-    const models = parseCodebuddyModelsFile(text);
-    if (models.length === 0) {
-      throw new Error(
-        'CodeBuddy 模型列表获取失败：~/.codebuddy/models.json 中没有可用模型。内置模型请在 CodeBuddy 交互会话里用 /model 查看。',
-      );
-    }
-    return { models, source: '~/.codebuddy/models.json' };
+    // Product config first, models.json layers merged on top (see the
+    // module comment). No hardcoded catalogue; when nothing yields a
+    // list the error points at /model.
+    const { models, source } = await listCodebuddyModels({
+      binPath: opts.codebuddyBinPath,
+      productConfigPath: opts.codebuddyProductConfigPath,
+      homeDir: opts.codebuddyHomeDir,
+      codebuddyModelsPath: opts.codebuddyModelsPath,
+      projectDir: opts.codebuddyProjectDir ?? null,
+    });
+    return { models: models.map((m) => m.id), source };
   }
 
   if (id === 'pi') {
