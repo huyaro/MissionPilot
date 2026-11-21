@@ -349,12 +349,12 @@ export function Connections(props: { api: BoardApi; onChanged?: () => void }) {
         <div
           style={{
             display: 'grid',
-            gridTemplateColumns: 'minmax(280px, 340px) 1fr',
+            gridTemplateColumns: 'minmax(280px, 340px) minmax(0, 1fr)',
             gap: 16,
             alignItems: 'start',
           }}
         >
-          <div className="card" style={{ marginBottom: 0 }}>
+          <div className="card" style={{ marginBottom: 0, minWidth: 0 }}>
             <h2>本地 Agent</h2>
             {executors.length === 0 ? (
               <p className="sub">加载中…</p>
@@ -401,7 +401,7 @@ export function Connections(props: { api: BoardApi; onChanged?: () => void }) {
             )}
           </div>
 
-          <div className="card" style={{ marginBottom: 0 }}>
+          <div className="card" style={{ marginBottom: 0, minWidth: 0 }}>
             {selected === null || selectedEdit === null ? (
               <p className="sub">没有可配置的 agent。</p>
             ) : (
@@ -416,7 +416,7 @@ export function Connections(props: { api: BoardApi; onChanged?: () => void }) {
                         {selected.detected ? '已检测到' : '未检测到'}
                       </span>
                     </h2>
-                    <p className="sub" style={{ margin: '0 0 4px' }}>
+                    <p className="sub" style={{ margin: '0 0 4px', overflowWrap: 'break-word' }}>
                       {selected.version ? `版本 ${selected.version}` : '版本未知'}
                       {selected.detected && selected.signal
                         ? selected.signal.kind === 'binary'
@@ -472,7 +472,7 @@ export function Connections(props: { api: BoardApi; onChanged?: () => void }) {
                     ) : (
                       <>
                         <h3 style={{ margin: '18px 0 8px' }}>模型与派发范围</h3>
-                        <p className="sub" style={{ marginTop: 0 }}>
+                        <p className="sub" style={{ marginTop: 0, overflowWrap: 'break-word' }}>
                           来源：{selectedModels.source}
                         </p>
                         {selectedEdit.models.length === 0 ? (
@@ -491,7 +491,7 @@ export function Connections(props: { api: BoardApi; onChanged?: () => void }) {
                             <tbody>
                               {selectedEdit.models.map((m) => (
                                 <tr key={m.id}>
-                                  <td>
+                                  <td style={{ wordBreak: 'break-all' }}>
                                     <strong>{m.id}</strong>
                                   </td>
                                   <td>
@@ -550,7 +550,7 @@ export function Connections(props: { api: BoardApi; onChanged?: () => void }) {
                             </tbody>
                           </table>
                         )}
-                        <p className="sub" style={{ marginTop: 16 }}>
+                        <p className="sub" style={{ marginTop: 16, overflowWrap: 'break-word' }}>
                           {scopeLine(selectedEdit)}
                         </p>
                         <div style={{ display: 'flex', gap: 8, margin: '12px 0' }}>
