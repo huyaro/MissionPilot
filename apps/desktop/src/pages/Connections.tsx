@@ -114,7 +114,7 @@ export function Connections(props: { api: BoardApi }) {
       {error && <p className="error">{error}</p>}
       {saved && <p style={{ color: 'var(--green)' }}>{saved}</p>}
       <div className="card">
-        <h2>主脑与执行者</h2>
+        <h2>主脑</h2>
         {data === null ? (
           <p className="sub">加载中…</p>
         ) : (
