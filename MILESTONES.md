@@ -65,7 +65,7 @@
 
 - 只做两个工具：`dispatch_task`（异步，立即返回 attempt_id）+ `get_attempt`。
 - 执行器先接 codebuddy；qoder 走同一 adapter 接口随后接（P1）。
-- Codex 接入：`codex mcp add local-agents -- node <server.js>`（stdio，不走网络）。
+- Codex 接入：`codex mcp add pilot-tasks -- node <server.js>`（stdio，不走网络）。
 - 目标：一个 mission、一个任务、一个 CLI 执行者，结果可轮询，证明派活闭环。
 
 ### DoD（4 条全过才算 P0 完成）
@@ -194,7 +194,7 @@
    模型命令，取的是 `~/.codebuddy/models.json`（availableModels 优先，否则
    models[].id），该文件不存在时设置页会明确提示取不到、模型只能用 CLI 默认——
    Mac 上需确认该文件是否存在、内容是否就是用户想要的模型范围。
-2. **Codex 经 stdio 调通**：需在 Mac 上 `codex mcp add local-agents -- node <server.js>` 后实测。
+2. **Codex 经 stdio 调通**：需在 Mac 上 `codex mcp add pilot-tasks -- node <server.js>` 后实测。
 3. **ChatGPT 档位**：决定 P2b 是否值得做；P0/P1 不卡。
 4. **Tauri Mac 实机**：本机只做 Linux 构建验证；Mac 打包与运行由用户侧验证。
    VM 侧已做的：`cargo check`/`cargo build`（Linux）通过；Xvfb 下实跑应用，

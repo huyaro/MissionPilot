@@ -149,7 +149,7 @@ async function main(): Promise<void> {
         });
       }
     }
-    log('info', 'local-agents MCP server started (http)', {
+    log('info', 'pilot-tasks MCP server started (http)', {
       dataDir,
       recovered,
       tickMs: tick,
@@ -173,7 +173,7 @@ async function main(): Promise<void> {
   const stdioTransport = new StdioServerTransport();
   await server.connect(stdioTransport);
   scheduler.start(tick);
-  log('info', 'local-agents MCP server started (stdio)', { dataDir, recovered, tickMs: tick });
+  log('info', 'pilot-tasks MCP server started (stdio)', { dataDir, recovered, tickMs: tick });
   const shutdown = (): void => {
     scheduler.stop();
     store.close();

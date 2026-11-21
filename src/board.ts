@@ -311,7 +311,7 @@ export function createBoardHandler(deps: BoardDeps) {
               label: 'Codex',
               transport: 'stdio',
               status: 'available',
-              note: '本地 stdio MCP——连接方式：codex mcp add local-agents',
+              note: '本地 stdio MCP——连接方式：codex mcp add pilot-tasks',
             },
             {
               id: 'chatgpt',

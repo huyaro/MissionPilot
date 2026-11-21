@@ -114,7 +114,7 @@ export function createMcpServer(
 ): Server {
   const readOnly = opts.readOnly ?? false;
   const server = new Server(
-    { name: 'local-agents', version: '0.1.0' },
+    { name: 'pilot-tasks', version: '0.1.0' },
     { capabilities: { tools: {} } },
   );
 

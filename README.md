@@ -13,7 +13,7 @@ agent CLI（先 CodeBuddy、Qoder），自己验收、循环改到过为止；�
 npm install
 npm run build
 node dist/src/server.js          # MCP server over stdio；用 Codex 接入：
-# codex mcp add local-agents -- node /path/to/MissionPilot/dist/src/server.js
+# codex mcp add pilot-tasks -- node /path/to/MissionPilot/dist/src/server.js
 ```
 
 数据目录：`$ORCHESTRATOR_DATA_DIR`，默认 `~/.mission-pilot`。
