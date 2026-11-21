@@ -13,6 +13,7 @@ import { Verifier } from './verifier.js';
 import { HttpMcpServer } from './http.js';
 import { createBoardHandler, type TunnelTestResult } from './board.js';
 import { TunnelManager } from './tunnel.js';
+import { loadTunnelConfig, saveTunnelConfig, type SavedTunnelConfig } from './tunnel-config.js';
 import { codebuddyAdapter } from './adapters/codebuddy.js';
 import { qoderAdapter } from './adapters/qoder.js';
 import { createMcpServer } from './mcp.js';
@@ -47,6 +48,10 @@ async function main(): Promise<void> {
     const port = Number(process.env.ORCHESTRATOR_HTTP_PORT ?? 8788);
     const readOnly = (process.env.ORCHESTRATOR_MCP_MODE ?? 'full') === 'readonly';
     let tunnel: TunnelManager | null = null;
+    // Tunnel config saved from the Settings UI (tunnel-config.json in
+    // the data dir). Loaded once at boot; updated whenever the UI
+    // applies new values.
+    let savedTunnel: SavedTunnelConfig | null = loadTunnelConfig(dataDir);
     // Port actually bound (normally == port; updated after listen).
     let actualPort = port;
     // (Re)start tunnel-client with the given values. The API key lives
@@ -70,12 +75,27 @@ async function main(): Promise<void> {
     };
     // Settings UI path: apply the new values, (re)start tunnel-client,
     // and wait briefly for it to come up so the status area can show
-    // the settled state (running, or failed with a reason).
+    // the settled state (running, or failed with a reason). Empty
+    // fields fall back to the saved config — the key is never echoed
+    // back, so the UI cannot prefill it. The resolved values are
+    // saved to disk (see tunnel-config.ts) so the next start, and
+    // the next backend boot, need no re-entry.
     const applyTunnelConfig = async (
       tunnelId: string,
       apiKey: string,
     ): Promise<ReturnType<TunnelManager['status']>> => {
-      const mgr = startTunnel(tunnelId, apiKey);
+      const finalId = tunnelId || savedTunnel?.tunnelId || '';
+      const finalKey = apiKey || savedTunnel?.apiKey || '';
+      if (!finalId || !finalKey) throw new Error('请填写 Tunnel ID 与 API key');
+      const mgr = startTunnel(finalId, finalKey);
+      try {
+        saveTunnelConfig(dataDir, { tunnelId: finalId, apiKey: finalKey });
+        savedTunnel = { tunnelId: finalId, apiKey: finalKey };
+      } catch (err) {
+        log('warn', 'failed to save tunnel config', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
       await mgr.waitForHealthy(10_000);
       return mgr.status();
     };
@@ -106,8 +126,8 @@ async function main(): Promise<void> {
       store,
       getTunnelStatus: () => tunnel?.status() ?? null,
       getTunnelConfig: () => ({
-        tunnelId: tunnel?.status().tunnelId ?? null,
-        apiKeySet: tunnel !== null,
+        tunnelId: tunnel?.status().tunnelId ?? savedTunnel?.tunnelId ?? null,
+        apiKeySet: tunnel !== null || savedTunnel !== null,
       }),
       startTunnel: applyTunnelConfig,
       stopTunnel,
@@ -117,6 +137,18 @@ async function main(): Promise<void> {
     actualPort = await http.listen();
     scheduler.start(tick);
 
+    // Auto-start the tunnel from the saved config (first entry in the
+    // Settings UI persists it). Spawn failures surface as state
+    // 'failed' with a reason; they must not crash the boot.
+    if (savedTunnel) {
+      try {
+        startTunnel(savedTunnel.tunnelId, savedTunnel.apiKey);
+      } catch (err) {
+        log('warn', 'saved tunnel config could not be started', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
     log('info', 'local-agents MCP server started (http)', {
       dataDir,
       recovered,

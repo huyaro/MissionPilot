@@ -197,6 +197,7 @@ describe('tunnel config API', () => {
   let base2: string;
   let started: { tunnelId: string; apiKey: string } | null;
   let stopped = false;
+  let savedKey = false;
   let tunnelPresent = true;
 
   async function api2(path: string, opts: RequestInit = {}): Promise<{ status: number; body: any }> {
@@ -216,7 +217,7 @@ describe('tunnel config API', () => {
     const board = createBoardHandler({
       store: store2,
       getTunnelStatus: () => null,
-      getTunnelConfig: () => ({ tunnelId: 'tunnel_env', apiKeySet: false }),
+      getTunnelConfig: () => ({ tunnelId: 'tunnel_env', apiKeySet: savedKey }),
       startTunnel: async (tunnelId, apiKey) => {
         started = { tunnelId, apiKey };
         return {
@@ -285,6 +286,23 @@ describe('tunnel config API', () => {
     assert.equal(started?.tunnelId, 'tunnel_x');
     assert.equal(started?.apiKey, 'secret-key-123');
     assert.ok(!JSON.stringify(r.body).includes('secret-key-123'));
+  });
+
+  it('starts with the saved config when both fields are empty', async () => {
+    savedKey = true;
+    try {
+      const r = await api2('/api/tunnel/config', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ tunnelId: '', apiKey: '' }),
+      });
+      assert.equal(r.status, 200);
+      assert.equal(r.body.tunnel.tunnelId, 'tunnel_env');
+      assert.equal(started?.tunnelId, 'tunnel_env');
+      assert.equal(started?.apiKey, '');
+    } finally {
+      savedKey = false;
+    }
   });
 
   it('stops the tunnel and reports it as absent', async () => {

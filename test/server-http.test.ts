@@ -5,7 +5,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, chmodSync } from 'node:fs';
+import { mkdtempSync, chmodSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -77,6 +77,27 @@ describe('server entry (--http + tunnel)', () => {
         await sleep(200);
       }
       assert.equal(healthy, true, `tunnel never became healthy; stderr:\n${stderr}`);
+      // The applied config is persisted: the file exists and a second
+      // start with empty fields reuses it (the UI path for restart
+      // after a stop, where the key is never echoed back).
+      const savedFile = join(dataDir, 'tunnel-config.json');
+      const saved = JSON.parse(readFileSync(savedFile, 'utf8')) as {
+        tunnelId: string;
+        apiKey: string;
+      };
+      assert.equal(saved.tunnelId, 'tunnel_test');
+      assert.equal(saved.apiKey, 'test-key');
+      const againRes = await fetch(`http://127.0.0.1:${port}/api/tunnel/config`, {
+        method: 'POST',
+        headers: {
+          authorization: 'Bearer entry-test-token',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ tunnelId: '', apiKey: '' }),
+      });
+      assert.equal(againRes.status, 200);
+      const againBody = (await againRes.json()) as { tunnel: { tunnelId: string } };
+      assert.equal(againBody.tunnel.tunnelId, 'tunnel_test');
     } finally {
       proc.kill('SIGTERM');
     }

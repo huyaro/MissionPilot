@@ -325,11 +325,20 @@ export function createBoardHandler(deps: BoardDeps) {
         const body = (await readJsonBody(req)) as Record<string, unknown>;
         const tunnelId = typeof body.tunnelId === 'string' ? body.tunnelId.trim() : '';
         const apiKey = typeof body.apiKey === 'string' ? body.apiKey.trim() : '';
-        if (!tunnelId || !apiKey) {
-          json(res, 400, { error: '请填写 Tunnel ID 与 API key' });
+        // Empty fields fall back to the saved config: the key is never
+        // echoed back, so the UI cannot prefill it — an empty key
+        // means "use the saved one". The backend resolves it.
+        const cfg = deps.getTunnelConfig?.() ?? { tunnelId: null, apiKeySet: false };
+        const finalId = tunnelId || cfg.tunnelId || '';
+        if (!finalId) {
+          json(res, 400, { error: '请填写 Tunnel ID' });
           return true;
         }
-        const tunnel = await deps.startTunnel(tunnelId, apiKey);
+        if (!apiKey && !cfg.apiKeySet) {
+          json(res, 400, { error: '请填写 API 密钥' });
+          return true;
+        }
+        const tunnel = await deps.startTunnel(finalId, apiKey);
         json(res, 200, { tunnel });
         return true;
       }

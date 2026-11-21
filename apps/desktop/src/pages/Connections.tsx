@@ -74,15 +74,24 @@ export function Connections(props: { api: BoardApi }) {
   };
 
   const startTunnel = async () => {
-    if (!tunnelId.trim() || !apiKey.trim()) {
-      setTunnelError('请填写 Tunnel ID 与 API key');
+    const savedId = data?.tunnelConfig?.tunnelId ?? '';
+    const hasSavedKey = data?.tunnelConfig?.apiKeySet ?? false;
+    if (!tunnelId.trim() && !savedId) {
+      setTunnelError('请填写 Tunnel ID');
+      return;
+    }
+    if (!apiKey.trim() && !hasSavedKey) {
+      setTunnelError('请填写 API 密钥');
       return;
     }
     setTunnelError(null);
     setStarting(true);
     try {
+      // Empty fields mean "use the saved config" — the key is never
+      // echoed back, so the input cannot prefill it.
       const r = await api.startTunnel(tunnelId.trim(), apiKey.trim());
-      // The key now lives in backend memory; don't keep it in the input.
+      // The key now lives in backend memory (and the saved config);
+      // don't keep it in the input.
       setApiKey('');
       if (r.tunnel.state === 'failed') {
         setTunnelError(r.tunnel.lastError ?? '隧道启动失败，请检查 Tunnel ID 与 API key 是否正确。');
@@ -112,6 +121,11 @@ export function Connections(props: { api: BoardApi }) {
   // reconnecting; 'failed' / 'stopped' / absent means it can be started.
   const tunnelActive =
     data?.tunnel != null && data.tunnel.state !== 'failed' && data.tunnel.state !== 'stopped';
+  // Starting needs an ID and a key — each from the input, or from the
+  // saved config when the input is empty.
+  const canStartTunnel =
+    (tunnelId.trim() !== '' || (data?.tunnelConfig?.tunnelId ?? '') !== '') &&
+    (apiKey.trim() !== '' || (data?.tunnelConfig?.apiKeySet ?? false));
 
   return (
     <div>
@@ -292,7 +306,7 @@ export function Connections(props: { api: BoardApi }) {
             value={apiKey}
             onChange={(ev) => setApiKey(ev.target.value)}
             placeholder={
-              data?.tunnelConfig?.apiKeySet ? '已填写（不会回显，需重新输入）' : '输入 API 密钥'
+              data?.tunnelConfig?.apiKeySet ? '已保存，留空使用已保存的密钥' : '输入 API 密钥'
             }
             style={{ width: 280 }}
           />
@@ -305,7 +319,7 @@ export function Connections(props: { api: BoardApi }) {
           ) : (
             <button
               className="btn"
-              disabled={starting || !tunnelId.trim() || !apiKey.trim()}
+              disabled={starting || !canStartTunnel}
               onClick={() => void startTunnel()}
             >
               {starting ? '启动中…' : '启动隧道'}
