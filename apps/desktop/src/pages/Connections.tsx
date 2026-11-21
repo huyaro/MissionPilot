@@ -63,7 +63,7 @@ export function Connections(props: { api: BoardApi }) {
 
   return (
     <div>
-      <h1>连接</h1>
+      <h1>设置</h1>
       <p className="sub">大脑、隧道与执行者——以及各执行者应使用的模型。</p>
       {error && <p className="error">{error}</p>}
       {saved && <p style={{ color: 'var(--green)' }}>{saved}</p>}

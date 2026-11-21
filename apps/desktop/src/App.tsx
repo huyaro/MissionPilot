@@ -17,7 +17,7 @@ const NAV: { id: string; label: string }[] = [
   { id: 'approvals', label: '审批中心' },
   { id: 'scoreboard', label: '记分板' },
   { id: 'ledger', label: '账本' },
-  { id: 'connections', label: '连接' },
+  { id: 'connections', label: '设置' },
 ];
 
 export default function App() {
