@@ -2,7 +2,9 @@ import { useEffect, useState } from 'react';
 import type { BoardApi, LedgerEntry, MissionSummary } from '../api';
 import { statusLabel } from '../labels';
 
-export function Ledger(props: { api: BoardApi }) {
+// Ledger as a card (used by the merged 记分板与账本 page). Keeps its own
+// data fetching; the page title lives in the parent page.
+export function LedgerCard(props: { api: BoardApi }) {
   const { api } = props;
   const [missions, setMissions] = useState<MissionSummary[]>([]);
   const [entries, setEntries] = useState<LedgerEntry[]>([]);
@@ -31,8 +33,8 @@ export function Ledger(props: { api: BoardApi }) {
   }, [api]);
 
   return (
-    <div>
-      <h1>账本</h1>
+    <div className="card">
+      <h2>账本</h2>
       <p className="sub">
         预算与哈希链审计记录。{' '}
         {chainOk === null ? (
@@ -44,8 +46,7 @@ export function Ledger(props: { api: BoardApi }) {
         )}
       </p>
       {error && <p className="error">{error}</p>}
-      <div className="card">
-        <h2>预算</h2>
+      <h3>预算</h3>
         {missions.length === 0 ? (
           <p className="sub">暂无任务。</p>
         ) : (
@@ -74,9 +75,7 @@ export function Ledger(props: { api: BoardApi }) {
             </tbody>
           </table>
         )}
-      </div>
-      <div className="card">
-        <h2>审计记录 ({entries.length})</h2>
+      <h3>审计记录 ({entries.length})</h3>
         {entries.length === 0 ? (
           <p className="sub">暂无账本记录。</p>
         ) : (
@@ -105,7 +104,6 @@ export function Ledger(props: { api: BoardApi }) {
             </tbody>
           </table>
         )}
-      </div>
     </div>
   );
 }

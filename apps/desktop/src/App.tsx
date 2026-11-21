@@ -5,8 +5,7 @@ import { Overview, type NavTarget } from './pages/Overview';
 import { MissionDetail } from './pages/MissionDetail';
 import { AttemptDetail } from './pages/AttemptDetail';
 import { Approvals } from './pages/Approvals';
-import { Scoreboard } from './pages/Scoreboard';
-import { Ledger } from './pages/Ledger';
+import { ScoreboardLedger } from './pages/ScoreboardLedger';
 import { Connections } from './pages/Connections';
 import { statusLabel } from './labels';
 import brandIcon from './assets/icon.png';
@@ -15,8 +14,7 @@ import './styles.css';
 const NAV: { id: string; label: string }[] = [
   { id: 'overview', label: '总览' },
   { id: 'approvals', label: '审批中心' },
-  { id: 'scoreboard', label: '记分板' },
-  { id: 'ledger', label: '账本' },
+  { id: 'scoreboard', label: '记分板与账本' },
   { id: 'connections', label: '设置' },
 ];
 
@@ -259,8 +257,7 @@ export default function App() {
         )}
         {page === 'attempt' && nav.attemptId && <AttemptDetail api={api} attemptId={nav.attemptId} />}
         {page === 'approvals' && <Approvals api={api} onChanged={() => setSidebarTick((t) => t + 1)} />}
-        {page === 'scoreboard' && <Scoreboard api={api} />}
-        {page === 'ledger' && <Ledger api={api} />}
+        {page === 'scoreboard' && <ScoreboardLedger api={api} />}
         {page === 'connections' && <Connections api={api} />}
       </main>
     </div>

@@ -92,6 +92,44 @@ describe('tunnel manager', () => {
     }
   });
 
+  it('waitForHealthy resolves true once the fake is up (without the background timer)', async () => {
+    chmodSync(fakeBin, 0o755);
+    const dataDir = mkdtempSync(join(tmpdir(), 'orch-tunnel-'));
+    const mgr = new TunnelManager({
+      bin: fakeBin,
+      tunnelId: 'tunnel_test',
+      apiKey: 'test-key',
+      mcpServerUrl: 'http://127.0.0.1:8788/mcp',
+      dataDir,
+      healthCheckIntervalMs: 60_000, // background timer must not be what flips the state
+    });
+    try {
+      mgr.start();
+      assert.equal(await mgr.waitForHealthy(10_000), true);
+      assert.equal(mgr.status().state, 'running');
+    } finally {
+      mgr.stop();
+    }
+  });
+
+  it('waitForHealthy resolves false when spawn fails', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'orch-tunnel-'));
+    const mgr = new TunnelManager({
+      bin: '/nonexistent/tunnel-client',
+      tunnelId: 'tunnel_test',
+      apiKey: 'test-key',
+      mcpServerUrl: 'http://127.0.0.1:8788/mcp',
+      dataDir,
+    });
+    try {
+      mgr.start();
+      assert.equal(await mgr.waitForHealthy(10_000), false);
+      assert.equal(mgr.status().state, 'failed');
+    } finally {
+      mgr.stop();
+    }
+  });
+
   it('refuses to construct without tunnel id or API key', () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'orch-tunnel-'));
     assert.throws(

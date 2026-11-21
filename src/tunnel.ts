@@ -165,19 +165,45 @@ export class TunnelManager {
     this.restartTimer = setTimeout(() => this.spawn(), delay);
   }
 
+  /**
+   * Wait until the tunnel reports healthy via /healthz (or give up).
+   * Returns false promptly when the process failed to spawn or exited
+   * for good; true only when a /healthz fetch succeeds. Used by the
+   * Settings UI connection test so it does not wait for the 5s
+   * background health timer.
+   */
+  async waitForHealthy(timeoutMs = 30_000): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const state = this.state;
+      if (state === 'running') return true;
+      if (state === 'failed' || state === 'stopped') return false;
+      if (await this.checkHealthOnce()) return true;
+      if (Date.now() >= deadline) return false;
+      await new Promise((r) => setTimeout(r, 500));
+    }
+  }
+
   private async checkHealth(): Promise<void> {
     if (this.state === 'stopped' || this.state === 'failed') return;
+    await this.checkHealthOnce();
+  }
+
+  /** One health probe; returns true when /healthz answers. Updates healthUrl. */
+  private async checkHealthOnce(): Promise<boolean> {
     try {
       const url = (await readFile(this.healthUrlFile, 'utf8')).trim();
-      if (!url) return;
+      if (!url) return false;
       this.healthUrl = url;
       const res = await fetch(url, { signal: AbortSignal.timeout(2000) });
       if (res.ok && (this.state === 'starting' || this.state === 'reconnecting')) {
         this.state = 'running';
         log('info', 'tunnel-client healthy', { tunnelId: this.opts.tunnelId });
       }
+      return res.ok;
     } catch {
       // Not ready yet — stay in starting/reconnecting.
+      return false;
     }
   }
 }

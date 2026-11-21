@@ -190,3 +190,142 @@ describe('board API', () => {
     assert.equal(r.status, 404);
   });
 });
+
+describe('tunnel config API', () => {
+  let store2: Store;
+  let http2: HttpMcpServer;
+  let base2: string;
+  let started: { tunnelId: string; apiKey: string } | null;
+  let tunnelPresent = true;
+
+  async function api2(path: string, opts: RequestInit = {}): Promise<{ status: number; body: any }> {
+    const res = await fetch(`${base2}${path}`, {
+      ...opts,
+      headers: { authorization: `Bearer ${TOKEN}`, ...(opts.headers ?? {}) },
+    });
+    const body = await res.json().catch(() => null);
+    return { status: res.status, body };
+  }
+
+  before(async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'orch-board-tunnel-'));
+    store2 = new Store(join(dataDir, 'db.sqlite'));
+    const dispatcher = new Dispatcher(store2, new Map(), dataDir);
+    started = null;
+    const board = createBoardHandler({
+      store: store2,
+      getTunnelStatus: () => null,
+      getTunnelConfig: () => ({ tunnelId: 'tunnel_env', apiKeySet: false }),
+      startTunnel: async (tunnelId, apiKey) => {
+        started = { tunnelId, apiKey };
+        return {
+          state: 'running',
+          tunnelId,
+          pid: 7,
+          restarts: 0,
+          healthUrl: 'http://127.0.0.1:9/healthz',
+          lastError: null,
+        };
+      },
+      testTunnel: async () => {
+        if (!tunnelPresent) return null;
+        return {
+          status: {
+            state: 'running',
+            tunnelId: 'tunnel_x',
+            pid: 7,
+            restarts: 0,
+            healthUrl: 'http://127.0.0.1:9/healthz',
+            lastError: null,
+          },
+          test: { ok: true, tunnelHealthy: true, mcpReachable: true, message: '通道已接通' },
+        };
+      },
+    });
+    http2 = new HttpMcpServer(store2, dispatcher, { port: 0, token: TOKEN, board });
+    const port = await http2.listen();
+    base2 = `http://127.0.0.1:${port}`;
+  });
+
+  after(async () => {
+    await http2.close();
+    store2.close();
+  });
+
+  it('exposes the env tunnel id and key-set flag on connections', async () => {
+    const conn = await api2('/api/connections');
+    assert.equal(conn.status, 200);
+    assert.equal(conn.body.tunnelConfig.tunnelId, 'tunnel_env');
+    assert.equal(conn.body.tunnelConfig.apiKeySet, false);
+  });
+
+  it('rejects tunnel config without both fields', async () => {
+    const r = await api2('/api/tunnel/config', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ tunnelId: 'tunnel_x' }),
+    });
+    assert.equal(r.status, 400);
+    assert.equal(started, null);
+  });
+
+  it('starts the tunnel and never echoes the API key', async () => {
+    const r = await api2('/api/tunnel/config', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ tunnelId: 'tunnel_x', apiKey: 'secret-key-123' }),
+    });
+    assert.equal(r.status, 200);
+    assert.equal(r.body.tunnel.tunnelId, 'tunnel_x');
+    assert.equal(r.body.tunnel.state, 'running');
+    assert.equal(started?.tunnelId, 'tunnel_x');
+    assert.equal(started?.apiKey, 'secret-key-123');
+    assert.ok(!JSON.stringify(r.body).includes('secret-key-123'));
+  });
+
+  it('tests the channel without changing config', async () => {
+    const before = started;
+    const r = await api2('/api/tunnel/test', { method: 'POST' });
+    assert.equal(r.status, 200);
+    assert.equal(r.body.test.ok, true);
+    assert.equal(r.body.test.tunnelHealthy, true);
+    assert.equal(r.body.test.mcpReachable, true);
+    assert.equal(started, before);
+  });
+
+  it('test reports 409 when no tunnel has been started', async () => {
+    tunnelPresent = false;
+    try {
+      const r = await api2('/api/tunnel/test', { method: 'POST' });
+      assert.equal(r.status, 409);
+      assert.match(r.body.error, /启动隧道/);
+    } finally {
+      tunnelPresent = true;
+    }
+  });
+
+  it('returns 503 when the server cannot configure or test a tunnel', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'orch-board-tunnel503-'));
+    const s = new Store(join(dataDir, 'db.sqlite'));
+    const d = new Dispatcher(s, new Map(), dataDir);
+    const board = createBoardHandler({ store: s });
+    const h = new HttpMcpServer(s, d, { port: 0, token: TOKEN, board });
+    try {
+      const port = await h.listen();
+      const res = await fetch(`http://127.0.0.1:${port}/api/tunnel/config`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ tunnelId: 'tunnel_x', apiKey: 'k' }),
+      });
+      assert.equal(res.status, 503);
+      const test = await fetch(`http://127.0.0.1:${port}/api/tunnel/test`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' },
+      });
+      assert.equal(test.status, 503);
+    } finally {
+      await h.close();
+      s.close();
+    }
+  });
+});

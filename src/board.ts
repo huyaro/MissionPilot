@@ -12,10 +12,37 @@ import { decideApproval, executeApprovedPush } from './approvals.js';
 import { subscribeBoardEvents, type BoardEvent } from './bus.js';
 import type { TunnelStatus } from './tunnel.js';
 
+export interface TunnelTest {
+  ok: boolean;
+  tunnelHealthy: boolean;
+  mcpReachable: boolean;
+  message: string;
+}
+
+export interface TunnelTestResult {
+  status: TunnelStatus;
+  test: TunnelTest;
+}
+
 export interface BoardDeps {
   store: Store;
   /** Tunnel status when the server manages one; null = tunnel disabled. */
   getTunnelStatus?: () => TunnelStatus | null;
+  /**
+   * Current tunnel id (env default or UI-configured) and whether an API
+   * key is held in memory. The key itself is never exposed.
+   */
+  getTunnelConfig?: () => { tunnelId: string | null; apiKeySet: boolean };
+  /**
+   * Apply UI values (stored in memory only) and (re)start tunnel-client.
+   * Waits briefly for it to come up healthy, then returns its status.
+   */
+  startTunnel?: (tunnelId: string, apiKey: string) => Promise<TunnelStatus>;
+  /**
+   * Test the channel without changing config. Returns null when no
+   * tunnel has been started yet.
+   */
+  testTunnel?: () => Promise<TunnelTestResult | null>;
 }
 
 const BODY_LIMIT = 10 * 1024 * 1024;
@@ -243,6 +270,9 @@ export function createBoardHandler(deps: BoardDeps) {
       // -- connections -------------------------------------------------------
       if (req.method === 'GET' && path === '/api/connections') {
         const tunnel = deps.getTunnelStatus ? deps.getTunnelStatus() : null;
+        const tunnelConfig = deps.getTunnelConfig
+          ? deps.getTunnelConfig()
+          : { tunnelId: null as string | null, apiKeySet: false };
         json(res, 200, {
           brains: [
             {
@@ -250,7 +280,7 @@ export function createBoardHandler(deps: BoardDeps) {
               label: 'Codex',
               transport: 'stdio',
               status: 'available',
-              note: 'Local stdio MCP — connect with: codex mcp add local-agents',
+              note: '本地 stdio MCP——连接方式：codex mcp add local-agents',
             },
             {
               id: 'chatgpt',
@@ -258,11 +288,12 @@ export function createBoardHandler(deps: BoardDeps) {
               transport: 'http + tunnel',
               status: tunnel ? (tunnel.state === 'running' ? 'connected' : 'pending') : 'disabled',
               note: tunnel
-                ? `tunnel ${tunnel.tunnelId} (${tunnel.state})`
-                : 'Set ORCHESTRATOR_TUNNEL_ID to enable. Full MCP (write) needs a Business/Enterprise/Edu plan; Pro is read-only.',
+                ? `隧道 ${tunnel.tunnelId}（${tunnel.state}）`
+                : '未启用。在设置页填写 Tunnel ID 与 API key 并测试连接。完整 MCP（含写操作）需 Business/Enterprise/Edu 套餐；Pro 仅只读。',
             },
           ],
           tunnel,
+          tunnelConfig,
           executors: (await Promise.all(
             getExecutors().map(async (e) => {
               let state: ExecutorState;
@@ -273,6 +304,41 @@ export function createBoardHandler(deps: BoardDeps) {
             }),
           )),
         });
+        return true;
+      }
+      // -- tunnel configuration (Settings UI) -------------------------------
+      // The API key is held in memory only: never written to disk, never
+      // logged, and never echoed back in any response.
+      // Start and test are separate on purpose: starting applies the config
+      // and (re)starts tunnel-client; testing only verifies the channel
+      // and never starts a tunnel by itself.
+      if (req.method === 'POST' && path === '/api/tunnel/config') {
+        if (!deps.startTunnel) {
+          json(res, 503, { error: '隧道配置不可用（后端未以 HTTP 模式运行）' });
+          return true;
+        }
+        const body = (await readJsonBody(req)) as Record<string, unknown>;
+        const tunnelId = typeof body.tunnelId === 'string' ? body.tunnelId.trim() : '';
+        const apiKey = typeof body.apiKey === 'string' ? body.apiKey.trim() : '';
+        if (!tunnelId || !apiKey) {
+          json(res, 400, { error: '请填写 Tunnel ID 与 API key' });
+          return true;
+        }
+        const tunnel = await deps.startTunnel(tunnelId, apiKey);
+        json(res, 200, { tunnel });
+        return true;
+      }
+      if (req.method === 'POST' && path === '/api/tunnel/test') {
+        if (!deps.testTunnel) {
+          json(res, 503, { error: '隧道测试不可用（后端未以 HTTP 模式运行）' });
+          return true;
+        }
+        const result = await deps.testTunnel();
+        if (!result) {
+          json(res, 409, { error: '隧道尚未启动，请先点「启动隧道」' });
+          return true;
+        }
+        json(res, 200, result);
         return true;
       }
       // -- SSE ---------------------------------------------------------------

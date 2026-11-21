@@ -124,6 +124,22 @@ export interface BoardEventMsg {
   summary: string;
 }
 
+export interface TunnelInfo {
+  state: string;
+  tunnelId: string;
+  healthUrl: string | null;
+  pid: number | null;
+  restarts: number;
+  lastError: string | null;
+}
+
+export interface TunnelTest {
+  ok: boolean;
+  tunnelHealthy: boolean;
+  mcpReachable: boolean;
+  message: string;
+}
+
 export class BoardApi {
   constructor(
     private token: string,
@@ -197,10 +213,24 @@ export class BoardApi {
 
   connections(): Promise<{
     brains: { id: string; label: string; transport: string; status: string; note: string }[];
-    tunnel: { state: string; tunnelId: string; healthUrl: string | null; pid: number | null; restarts: number; lastError: string | null } | null;
+    tunnel: TunnelInfo | null;
+    tunnelConfig: { tunnelId: string | null; apiKeySet: boolean };
     executors: { id: string; label: string; state: string }[];
   }> {
     return this.req('/api/connections');
+  }
+
+  /** Apply tunnel ID + API key (memory only) and (re)start tunnel-client. */
+  startTunnel(tunnelId: string, apiKey: string): Promise<{ tunnel: TunnelInfo }> {
+    return this.req('/api/tunnel/config', {
+      method: 'POST',
+      body: JSON.stringify({ tunnelId, apiKey }),
+    });
+  }
+
+  /** Test the channel without changing config. Fails when no tunnel is running. */
+  testTunnel(): Promise<{ tunnel: TunnelInfo; test: TunnelTest }> {
+    return this.req('/api/tunnel/test', { method: 'POST' });
   }
 
   async saveExecutorConfig(

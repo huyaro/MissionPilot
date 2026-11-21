@@ -10,7 +10,7 @@ import { Dispatcher, recoverInterruptedAttempts } from './dispatcher.js';
 import { Scheduler } from './scheduler.js';
 import { Verifier } from './verifier.js';
 import { HttpMcpServer } from './http.js';
-import { createBoardHandler } from './board.js';
+import { createBoardHandler, type TunnelTestResult } from './board.js';
 import { TunnelManager } from './tunnel.js';
 import { codebuddyAdapter } from './adapters/codebuddy.js';
 import { qoderAdapter } from './adapters/qoder.js';
@@ -46,12 +46,68 @@ async function main(): Promise<void> {
     const port = Number(process.env.ORCHESTRATOR_HTTP_PORT ?? 8788);
     const readOnly = (process.env.ORCHESTRATOR_MCP_MODE ?? 'full') === 'readonly';
     let tunnel: TunnelManager | null = null;
+    // Port actually bound (normally == port; updated after listen).
+    let actualPort = port;
+    // (Re)start tunnel-client with the given values. The API key lives
+    // only in this process's memory: never written to disk, never logged.
+    const startTunnel = (tunnelId: string, apiKey: string): TunnelManager => {
+      tunnel?.stop();
+      tunnel = new TunnelManager({
+        tunnelId,
+        apiKey,
+        mcpServerUrl: `http://127.0.0.1:${actualPort}/mcp`,
+        dataDir,
+        bin: process.env.ORCHESTRATOR_TUNNEL_BIN,
+      });
+      tunnel.start();
+      return tunnel;
+    };
+    // Settings UI path: apply the new values, (re)start tunnel-client,
+    // and wait briefly for it to come up so the status area can show
+    // the settled state (running, or failed with a reason).
+    const applyTunnelConfig = async (
+      tunnelId: string,
+      apiKey: string,
+    ): Promise<ReturnType<TunnelManager['status']>> => {
+      const mgr = startTunnel(tunnelId, apiKey);
+      await mgr.waitForHealthy(10_000);
+      return mgr.status();
+    };
+    // Settings UI path: verify the channel without changing config.
+    // Returns null when no tunnel has been started yet.
+    const checkMcpReachable = async (): Promise<boolean> => {
+      try {
+        const res = await fetch(`http://127.0.0.1:${actualPort}/health`, {
+          signal: AbortSignal.timeout(2000),
+        });
+        return res.ok;
+      } catch {
+        return false;
+      }
+    };
+    const testTunnelChannel = async (): Promise<TunnelTestResult | null> => {
+      if (!tunnel) return null;
+      const tunnelHealthy = await tunnel.waitForHealthy(30_000);
+      const mcpReachable = await checkMcpReachable();
+      const message = !tunnelHealthy
+        ? '通道未接通：tunnel-client 健康检查未通过。请检查 Tunnel ID 与 API key 是否正确。'
+        : !mcpReachable
+          ? '通道未完全接通：tunnel-client 已健康，但本地 MCP 端口不可达。'
+          : '通道已接通：tunnel-client 健康检查通过，本地 MCP 端口可达。';
+      return { status: tunnel.status(), test: { ok: tunnelHealthy && mcpReachable, tunnelHealthy, mcpReachable, message } };
+    };
     const board = createBoardHandler({
       store,
       getTunnelStatus: () => tunnel?.status() ?? null,
+      getTunnelConfig: () => ({
+        tunnelId: tunnel?.status().tunnelId ?? process.env.ORCHESTRATOR_TUNNEL_ID ?? null,
+        apiKeySet: tunnel !== null || Boolean(process.env.ORCHESTRATOR_TUNNEL_API_KEY),
+      }),
+      startTunnel: applyTunnelConfig,
+      testTunnel: testTunnelChannel,
     });
     const http = new HttpMcpServer(store, dispatcher, { port, token, readOnly, board });
-    const actualPort = await http.listen();
+    actualPort = await http.listen();
     scheduler.start(tick);
 
     const tunnelId = process.env.ORCHESTRATOR_TUNNEL_ID;
@@ -60,14 +116,7 @@ async function main(): Promise<void> {
       if (!apiKey) {
         log('warn', 'ORCHESTRATOR_TUNNEL_ID is set but ORCHESTRATOR_TUNNEL_API_KEY is missing; tunnel not started');
       } else {
-        tunnel = new TunnelManager({
-          tunnelId,
-          apiKey,
-          mcpServerUrl: `http://127.0.0.1:${actualPort}/mcp`,
-          dataDir,
-          bin: process.env.ORCHESTRATOR_TUNNEL_BIN,
-        });
-        tunnel.start();
+        startTunnel(tunnelId, apiKey);
       }
     }
     log('info', 'local-agents MCP server started (http)', {

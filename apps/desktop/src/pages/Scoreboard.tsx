@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
 import type { AgentScore, BoardApi } from '../api';
 
-export function Scoreboard(props: { api: BoardApi }) {
+// Scoreboard as a card (used by the merged 记分板与账本 page). Keeps its
+// own data fetching; the page title lives in the parent page.
+export function ScoreboardCard(props: { api: BoardApi }) {
   const { api } = props;
   const [agents, setAgents] = useState<AgentScore[]>([]);
   const [generatedAt, setGeneratedAt] = useState<string | null>(null);
@@ -23,15 +25,14 @@ export function Scoreboard(props: { api: BoardApi }) {
   }, [api]);
 
   return (
-    <div>
-      <h1>记分板</h1>
+    <div className="card">
+      <h2>记分板</h2>
       <p className="sub">
         Elo 初始 1200（K=32）。一次通过的尝试会击败同一任务上的失败尝试；单执行者任务没有对手，不改变 Elo。
         {generatedAt ? ` 生成于 ${new Date(generatedAt).toLocaleString()}。` : ''}
       </p>
       {error && <p className="error">{error}</p>}
-      <div className="card">
-        {agents.length === 0 ? (
+      {agents.length === 0 ? (
           <p className="sub">暂无尝试——首个已验证任务完成后显示分数。</p>
         ) : (
           <table>
@@ -69,7 +70,6 @@ export function Scoreboard(props: { api: BoardApi }) {
             </tbody>
           </table>
         )}
-      </div>
     </div>
   );
 }
