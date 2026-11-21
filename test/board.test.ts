@@ -196,6 +196,7 @@ describe('tunnel config API', () => {
   let http2: HttpMcpServer;
   let base2: string;
   let started: { tunnelId: string; apiKey: string } | null;
+  let stopped = false;
   let tunnelPresent = true;
 
   async function api2(path: string, opts: RequestInit = {}): Promise<{ status: number; body: any }> {
@@ -226,6 +227,9 @@ describe('tunnel config API', () => {
           healthUrl: 'http://127.0.0.1:9/healthz',
           lastError: null,
         };
+      },
+      stopTunnel: () => {
+        stopped = true;
       },
       testTunnel: async () => {
         if (!tunnelPresent) return null;
@@ -283,6 +287,14 @@ describe('tunnel config API', () => {
     assert.ok(!JSON.stringify(r.body).includes('secret-key-123'));
   });
 
+  it('stops the tunnel and reports it as absent', async () => {
+    stopped = false;
+    const r = await api2('/api/tunnel/stop', { method: 'POST' });
+    assert.equal(r.status, 200);
+    assert.equal(r.body.tunnel, null);
+    assert.equal(stopped, true);
+  });
+
   it('tests the channel without changing config', async () => {
     const before = started;
     const r = await api2('/api/tunnel/test', { method: 'POST' });
@@ -323,6 +335,11 @@ describe('tunnel config API', () => {
         headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' },
       });
       assert.equal(test.status, 503);
+      const stop = await fetch(`http://127.0.0.1:${port}/api/tunnel/stop`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' },
+      });
+      assert.equal(stop.status, 503);
     } finally {
       await h.close();
       s.close();

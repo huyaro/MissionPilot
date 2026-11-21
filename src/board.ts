@@ -39,6 +39,11 @@ export interface BoardDeps {
    */
   startTunnel?: (tunnelId: string, apiKey: string) => Promise<TunnelStatus>;
   /**
+   * Stop the tunnel managed by the server, if any. Drops the
+   * in-memory API key with it.
+   */
+  stopTunnel?: () => void;
+  /**
    * Test the channel without changing config. Returns null when no
    * tunnel has been started yet.
    */
@@ -339,6 +344,15 @@ export function createBoardHandler(deps: BoardDeps) {
           return true;
         }
         json(res, 200, result);
+        return true;
+      }
+      if (req.method === 'POST' && path === '/api/tunnel/stop') {
+        if (!deps.stopTunnel) {
+          json(res, 503, { error: '隧道停止不可用（后端未以 HTTP 模式运行）' });
+          return true;
+        }
+        deps.stopTunnel();
+        json(res, 200, { tunnel: null });
         return true;
       }
       // -- SSE ---------------------------------------------------------------

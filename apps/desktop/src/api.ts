@@ -133,13 +133,6 @@ export interface TunnelInfo {
   lastError: string | null;
 }
 
-export interface TunnelTest {
-  ok: boolean;
-  tunnelHealthy: boolean;
-  mcpReachable: boolean;
-  message: string;
-}
-
 export class BoardApi {
   constructor(
     private token: string,
@@ -228,9 +221,9 @@ export class BoardApi {
     });
   }
 
-  /** Test the channel without changing config. Fails when no tunnel is running. */
-  testTunnel(): Promise<{ tunnel: TunnelInfo; test: TunnelTest }> {
-    return this.req('/api/tunnel/test', { method: 'POST' });
+  /** Stop the tunnel managed by the backend, if any. */
+  stopTunnel(): Promise<{ tunnel: TunnelInfo | null }> {
+    return this.req('/api/tunnel/stop', { method: 'POST' });
   }
 
   async saveExecutorConfig(

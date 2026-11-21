@@ -62,6 +62,11 @@ async function main(): Promise<void> {
       tunnel.start();
       return tunnel;
     };
+    // Stop tunnel-client and drop the in-memory API key with it.
+    const stopTunnel = (): void => {
+      tunnel?.stop();
+      tunnel = null;
+    };
     // Settings UI path: apply the new values, (re)start tunnel-client,
     // and wait briefly for it to come up so the status area can show
     // the settled state (running, or failed with a reason).
@@ -104,6 +109,7 @@ async function main(): Promise<void> {
         apiKeySet: tunnel !== null || Boolean(process.env.ORCHESTRATOR_TUNNEL_API_KEY),
       }),
       startTunnel: applyTunnelConfig,
+      stopTunnel,
       testTunnel: testTunnelChannel,
     });
     const http = new HttpMcpServer(store, dispatcher, { port, token, readOnly, board });
