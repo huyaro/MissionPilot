@@ -28,7 +28,7 @@ export function Connections(props: { api: BoardApi }) {
         setData(r);
         // Prefill the tunnel id from the env default / current config,
         // but never overwrite what the user has already typed.
-        setTunnelId((prev) => prev || r.tunnelConfig.tunnelId || '');
+        setTunnelId((prev) => prev || r.tunnelConfig?.tunnelId || '');
       })
       .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
     api
@@ -284,7 +284,7 @@ export function Connections(props: { api: BoardApi }) {
             value={apiKey}
             onChange={(ev) => setApiKey(ev.target.value)}
             placeholder={
-              data?.tunnelConfig.apiKeySet ? '已填写（不会回显，需重新输入）' : '输入 API key'
+              data?.tunnelConfig?.apiKeySet ? '已填写（不会回显，需重新输入）' : '输入 API key'
             }
             style={{ width: 280 }}
           />

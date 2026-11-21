@@ -9,9 +9,13 @@ on Linux for verification.
 
 Normal path — one command. The app starts its own backend on launch
 (resolved backend JS, fresh token) and connects automatically; the Setup
-screen only appears if that fails:
+screen only appears if that fails. After pulling new code, rebuild the
+backend first from the repo root — `dist/` is a local build artifact and
+`npm run tauri dev` does not rebuild it, so without this the app keeps
+running the old backend:
 
 ```sh
+npm run build        # repo root: rebuild backend into dist/
 cd apps/desktop
 npm run tauri dev
 ```

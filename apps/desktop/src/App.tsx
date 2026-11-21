@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { BoardApi, probeHealth, type BoardEventMsg } from './api';
 import { backendStatus, getAppToken, getEnvToken, isTauri, resolveBackendPath, startBackend } from './tauri';
 import { Overview, type NavTarget } from './pages/Overview';
@@ -11,12 +11,52 @@ import { statusLabel } from './labels';
 import brandIcon from './assets/icon.png';
 import './styles.css';
 
-const NAV: { id: string; label: string }[] = [
-  { id: 'overview', label: '总览' },
-  { id: 'approvals', label: '审批中心' },
-  { id: 'scoreboard', label: '记分板与账本' },
-  { id: 'connections', label: '设置' },
+// Inline SVG icons (stroke, currentColor) — no icon dependency; the
+// desktop renderer is native ESM with no bundler.
+function Icon({ children }: { children: ReactNode }) {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      {children}
+    </svg>
+  );
+}
+
+const NAV: { id: string; label: string; icon: ReactNode }[] = [
+  {
+    id: 'overview', label: '总览',
+    icon: <Icon><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /></Icon>,
+  },
+  {
+    id: 'approvals', label: '审批中心',
+    icon: <Icon><circle cx="12" cy="12" r="9" /><path d="m8.5 12.5 2.5 2.5 5-5.5" /></Icon>,
+  },
+  {
+    id: 'scoreboard', label: '记分板与账本',
+    icon: <Icon><path d="M4 20V10" /><path d="M10 20V4" /><path d="M16 20v-7" /><path d="M2 20h20" /></Icon>,
+  },
+  {
+    id: 'connections', label: '设置',
+    icon: <Icon><line x1="4" y1="21" x2="4" y2="14" /><line x1="4" y1="10" x2="4" y2="3" /><line x1="12" y1="21" x2="12" y2="12" /><line x1="12" y1="8" x2="12" y2="3" /><line x1="20" y1="21" x2="20" y2="16" /><line x1="20" y1="12" x2="20" y2="3" /><line x1="1" y1="14" x2="7" y2="14" /><line x1="9" y1="8" x2="15" y2="8" /><line x1="17" y1="16" x2="23" y2="16" /></Icon>,
+  },
 ];
+
+// localStorage access can throw in a restricted webview; preferences then
+// just don't persist.
+function readStored(key: string): string | null {
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function writeStored(key: string, value: string) {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    // Ignore: preference is session-only in this case.
+  }
+}
 
 export default function App() {
   const [token, setToken] = useState<string | null>(null);
@@ -34,6 +74,12 @@ export default function App() {
   const [pendingCount, setPendingCount] = useState(0);
   const [sidebarTick, setSidebarTick] = useState(0);
   const [tunnelState, setTunnelState] = useState<string | null>(null);
+  const [theme, setTheme] = useState<'light' | 'dark'>(() =>
+    readStored('mission-pilot:theme') === 'dark' ? 'dark' : 'light',
+  );
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() =>
+    readStored('mission-pilot:sidebar-collapsed') === '1',
+  );
   const apiRef = useRef<BoardApi | null>(null);
 
   const api = useMemo(() => (token ? new BoardApi(token) : null), [token]);
@@ -41,8 +87,6 @@ export default function App() {
 
   const checkBackend = useCallback(async () => {
     const status = await backendStatus();
-    // TEMP DEBUG (white window): trace the launch flow.
-    console.log('[mission-pilot] checkBackend: running=', status.running, 'hasToken=', !!token, 'isTauri=', isTauri());
     setBackendRunning(status.running);
     if (status.running && !token) {
       const appToken = await getAppToken();
@@ -64,14 +108,11 @@ export default function App() {
       autoStartTried.current = true;
       setStarting(true);
       try {
-        console.log('[mission-pilot] auto-starting backend…');
         setDefaultBackendJs(await resolveBackendPath());
         const newToken = await startBackend(undefined);
-        console.log('[mission-pilot] auto-start ok, token received');
         setToken(newToken);
         setBackendRunning(true);
       } catch (e) {
-        console.log('[mission-pilot] auto-start failed:', e instanceof Error ? e.message : String(e));
         setSetupError(e instanceof Error ? e.message : String(e));
       } finally {
         setStarting(false);
@@ -82,6 +123,16 @@ export default function App() {
   useEffect(() => {
     void checkBackend();
   }, [checkBackend]);
+
+  // Theme + sidebar collapse are persisted across restarts.
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+    writeStored('mission-pilot:theme', theme);
+  }, [theme]);
+
+  useEffect(() => {
+    writeStored('mission-pilot:sidebar-collapsed', sidebarCollapsed ? '1' : '0');
+  }, [sidebarCollapsed]);
 
   // Live events (SSE) + sidebar counters, once we have a token.
   useEffect(() => {
@@ -220,46 +271,98 @@ export default function App() {
 
   const page = nav.page;
   return (
-    <div className="app">
+    <div className={`app${sidebarCollapsed ? ' sidebar-collapsed' : ''}`}>
       <aside className="sidebar">
-        <div className="brand"><img src={brandIcon} alt="" className="brand-icon" />MissionPilot</div>
+        <div className="brand"><img src={brandIcon} alt="" className="brand-icon" /><span className="brand-text">MissionPilot</span></div>
         {NAV.map((n) => (
           <button
             key={n.id}
             className={`nav-btn ${page === n.id || (n.id === 'overview' && (page === 'mission' || page === 'attempt')) ? 'active' : ''}`}
             onClick={() => setNav({ page: n.id })}
+            title={sidebarCollapsed ? n.label : undefined}
           >
-            <span>{n.label}</span>
-            {n.id === 'approvals' && pendingCount > 0 && <span className="badge">{pendingCount}</span>}
+            <span className="nav-icon">{n.icon}</span>
+            <span className="nav-label">{n.label}</span>
+            {n.id === 'approvals' && pendingCount > 0 && (
+              sidebarCollapsed ? (
+                <span className="badge-dot" title={`${pendingCount} 条待审批`} />
+              ) : (
+                <span className="badge">{pendingCount}</span>
+              )
+            )}
           </button>
         ))}
-        <div className="sidebar-section">
-          <div className="conn-row">
-            <span>后端</span>
-            <span className="pill connected">{statusLabel('running')}</span>
+        {sidebarCollapsed ? (
+          <div className="sidebar-dots">
+            <span className="status-dot ok" title={`后端：${statusLabel('running')}`} />
+            <span className={`status-dot ${tunnelState ?? 'disabled'}`} title={`隧道：${tunnelState ? statusLabel(tunnelState) : '—'}`} />
+            {pendingCount > 0 && <span className="status-dot pending" title={`待审批：${pendingCount}`} />}
           </div>
-          <div className="conn-row">
-            <span>隧道</span>
-            <span className={`pill ${tunnelState ?? 'disabled'}`}>{tunnelState ? statusLabel(tunnelState) : '—'}</span>
+        ) : (
+          <div className="sidebar-section">
+            <div className="conn-row">
+              <span>后端</span>
+              <span className="pill connected">{statusLabel('running')}</span>
+            </div>
+            <div className="conn-row">
+              <span>隧道</span>
+              <span className={`pill ${tunnelState ?? 'disabled'}`}>{tunnelState ? statusLabel(tunnelState) : '—'}</span>
+            </div>
+            <div className="conn-row">
+              <span>待审批</span>
+              <span>{pendingCount}</span>
+            </div>
           </div>
-          <div className="conn-row">
-            <span>待审批</span>
-            <span>{pendingCount}</span>
-          </div>
-        </div>
+        )}
       </aside>
-      <main className="main">
-        {page === 'overview' && (
-          <Overview api={api} events={events} onNavigate={setNav} />
-        )}
-        {page === 'mission' && nav.missionId && (
-          <MissionDetail api={api} missionId={nav.missionId} onNavigate={setNav} />
-        )}
-        {page === 'attempt' && nav.attemptId && <AttemptDetail api={api} attemptId={nav.attemptId} />}
-        {page === 'approvals' && <Approvals api={api} onChanged={() => setSidebarTick((t) => t + 1)} />}
-        {page === 'scoreboard' && <ScoreboardLedger api={api} />}
-        {page === 'connections' && <Connections api={api} />}
-      </main>
+      <div className="content">
+        <header className="topbar">
+          <button
+            className="icon-btn"
+            onClick={() => setSidebarCollapsed((c) => !c)}
+            title={sidebarCollapsed ? '展开导航栏' : '收起导航栏'}
+            aria-label={sidebarCollapsed ? '展开导航栏' : '收起导航栏'}
+          >
+            <Icon>
+              <rect x="3" y="3" width="18" height="18" rx="2" />
+              <path d="M9 3v18" />
+              {sidebarCollapsed ? <path d="m14 9 3 3-3 3" /> : <path d="m10 9-3 3 3 3" />}
+            </Icon>
+          </button>
+          <button
+            className="icon-btn theme-btn"
+            onClick={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
+            title={theme === 'dark' ? '切换到浅色主题' : '切换到深色主题'}
+            aria-label={theme === 'dark' ? '切换到浅色主题' : '切换到深色主题'}
+          >
+            <Icon>
+              {theme === 'dark' ? (
+                <>
+                  <circle cx="12" cy="12" r="4" />
+                  <path d="M12 2v2" /><path d="M12 20v2" />
+                  <path d="m4.9 4.9 1.4 1.4" /><path d="m17.7 17.7 1.4 1.4" />
+                  <path d="M2 12h2" /><path d="M20 12h2" />
+                  <path d="m6.3 17.7-1.4 1.4" /><path d="m19.1 4.9-1.4 1.4" />
+                </>
+              ) : (
+                <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" />
+              )}
+            </Icon>
+          </button>
+        </header>
+        <main className="main">
+          {page === 'overview' && (
+            <Overview api={api} events={events} onNavigate={setNav} />
+          )}
+          {page === 'mission' && nav.missionId && (
+            <MissionDetail api={api} missionId={nav.missionId} onNavigate={setNav} />
+          )}
+          {page === 'attempt' && nav.attemptId && <AttemptDetail api={api} attemptId={nav.attemptId} />}
+          {page === 'approvals' && <Approvals api={api} onChanged={() => setSidebarTick((t) => t + 1)} />}
+          {page === 'scoreboard' && <ScoreboardLedger api={api} />}
+          {page === 'connections' && <Connections api={api} />}
+        </main>
+      </div>
     </div>
   );
 }
