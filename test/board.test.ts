@@ -114,6 +114,8 @@ describe('board API', () => {
     assert.equal(execs.status, 200);
     const byId = new Map(execs.body.executors.map((e: any) => [e.id, e]));
     assert.equal((byId.get('codebuddy') as any).state, 'missing'); // probe pointed at a nonexistent binary in before()
+    assert.equal((byId.get('codebuddy') as any).detected, false);
+    assert.equal((byId.get('codebuddy') as any).added, false);
     assert.equal((byId.get('workbuddy') as any).state, 'pending');
     assert.equal((byId.get('gemini') as any).state, 'not-connected');
 
@@ -137,6 +139,47 @@ describe('board API', () => {
     assert.equal(ok.status, 200);
     assert.equal(ok.body.config.defaultModel, 'model-a');
     assert.equal(ok.body.config.reasoning, 'high');
+    // The config write above marks codebuddy as added.
+    const afterPut = await api('/api/executors');
+    assert.equal(
+      (afterPut.body.executors.find((e: any) => e.id === 'codebuddy') as any).added,
+      true,
+    );
+  });
+
+  it('serves per-executor model lists and removes configs', async () => {
+    const unknown = await api('/api/executors/nope/models');
+    assert.equal(unknown.status, 404);
+    // The probe binary is nonexistent in this file, so the fetch fails
+    // with a clear 502 instead of crashing.
+    const failed = await api('/api/executors/qoder/models');
+    assert.equal(failed.status, 502);
+    assert.match(failed.body.error, /无法获取 Qoder 模型列表/);
+    // Point the probe at the fake `qoder --list-models` for one call.
+    const prevQoderBin = process.env.ORCHESTRATOR_QODER_BIN;
+    process.env.ORCHESTRATOR_QODER_BIN = join(process.cwd(), 'scripts', 'fake-qoder-models.mjs');
+    try {
+      const listed = await api('/api/executors/qoder/models');
+      assert.equal(listed.status, 200);
+      assert.deepEqual(listed.body.models, ['Qwen3.8-Max', 'DeepSeek-V4-Flash', 'auto']);
+      assert.match(listed.body.source, /--list-models/);
+    } finally {
+      if (prevQoderBin === undefined) delete process.env.ORCHESTRATOR_QODER_BIN;
+      else process.env.ORCHESTRATOR_QODER_BIN = prevQoderBin;
+    }
+    const removed = await api('/api/executors/codebuddy/config', { method: 'DELETE' });
+    assert.equal(removed.status, 200);
+    assert.equal(removed.body.removed, true);
+    const execs = await api('/api/executors');
+    assert.equal(
+      (execs.body.executors.find((e: any) => e.id === 'codebuddy') as any).added,
+      false,
+    );
+    const removedAgain = await api('/api/executors/codebuddy/config', { method: 'DELETE' });
+    assert.equal(removedAgain.status, 200);
+    assert.equal(removedAgain.body.removed, false);
+    const unknownDelete = await api('/api/executors/nope/config', { method: 'DELETE' });
+    assert.equal(unknownDelete.status, 404);
   });
 
   it('runs the approval decision flow', async () => {

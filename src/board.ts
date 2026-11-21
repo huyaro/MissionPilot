@@ -4,13 +4,13 @@
 // This is NOT a browser-served page — the frontend lives in the Tauri app
 // and calls these endpoints; nothing here serves HTML.
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { execFile } from 'node:child_process';
 import type { Store } from './store.js';
 import { computeScoreboard } from './scoreboard.js';
 import { verifyLedger } from './ledger.js';
 import { decideApproval, executeApprovedPush } from './approvals.js';
 import { subscribeBoardEvents, type BoardEvent } from './bus.js';
 import type { TunnelStatus } from './tunnel.js';
+import { isKnownExecutor, listExecutorModels, listExecutors } from './executors.js';
 
 export interface TunnelTest {
   ok: boolean;
@@ -51,37 +51,6 @@ export interface BoardDeps {
 }
 
 const BODY_LIMIT = 10 * 1024 * 1024;
-
-// Executor connection states, grounded in the 2026-11-19/20 decisions:
-// codebuddy + qoder are the P0/P1 executors (binary presence = reachable);
-// workbuddy has no CLI and stays 'pending' (pi route is out of scope);
-// gemini is 'not-connected' (consumer plan cannot be wrapped, per ToS).
-// Read at request time (not module load) so tests can point the probe at
-// controlled paths; binary presence is still the reachability signal.
-function getExecutors() {
-  return [
-    { id: 'codebuddy', label: 'CodeBuddy', bin: process.env.ORCHESTRATOR_CODEBUDDY_BIN ?? 'codebuddy' },
-    { id: 'qoder', label: 'Qoder', bin: process.env.ORCHESTRATOR_QODER_BIN ?? 'qoder' },
-    { id: 'workbuddy', label: 'WorkBuddy', bin: null },
-    { id: 'gemini', label: 'Gemini', bin: null },
-  ] as const;
-}
-
-type ExecutorState = 'connected' | 'pending' | 'not-connected' | 'missing';
-
-const whichCache = new Map<string, { at: number; found: boolean }>();
-
-function whichBin(bin: string): Promise<boolean> {
-  const cached = whichCache.get(bin);
-  if (cached && Date.now() - cached.at < 60_000) return Promise.resolve(cached.found);
-  return new Promise((resolve) => {
-    execFile('which', [bin], { timeout: 5_000 }, (err) => {
-      const found = !err;
-      whichCache.set(bin, { at: Date.now(), found });
-      resolve(found);
-    });
-  });
-}
 
 function json(res: ServerResponse, status: number, body: unknown): void {
   const data = JSON.stringify(body);
@@ -207,23 +176,42 @@ export function createBoardHandler(deps: BoardDeps) {
       }
       // -- executors ---------------------------------------------------------
       if (req.method === 'GET' && path === '/api/executors') {
-        const executors = await Promise.all(
-          getExecutors().map(async (e) => {
-            let state: ExecutorState;
-            if (e.id === 'workbuddy') state = 'pending';
-            else if (e.id === 'gemini') state = 'not-connected';
-            else state = (await whichBin(e.bin)) ? 'connected' : 'missing';
-            const config = store.getExecutorConfig(e.id);
-            return { id: e.id, label: e.label, state, config };
-          }),
-        );
+        const executors = await listExecutors(store);
         json(res, 200, { executors });
         return true;
       }
+      // Model list for one executor, fetched from that agent's own
+      // mechanism (see src/executors.ts). 502 when the fetch fails —
+      // the error message says why, so the UI can show it as-is.
+      const modelsMatch = /^\/api\/executors\/([^/]+)\/models$/.exec(path);
+      if (req.method === 'GET' && modelsMatch) {
+        const agent = modelsMatch[1] as string;
+        if (!isKnownExecutor(agent)) {
+          json(res, 404, { error: 'unknown executor' });
+          return true;
+        }
+        try {
+          const result = await listExecutorModels(agent);
+          json(res, 200, result);
+        } catch (err) {
+          json(res, 502, { error: err instanceof Error ? err.message : String(err) });
+        }
+        return true;
+      }
       const configMatch = /^\/api\/executors\/([^/]+)\/config$/.exec(path);
+      if (configMatch && req.method === 'DELETE') {
+        const agent = configMatch[1] as string;
+        if (!isKnownExecutor(agent)) {
+          json(res, 404, { error: 'unknown executor' });
+          return true;
+        }
+        const removed = store.deleteExecutorConfig(agent);
+        json(res, 200, { removed, config: null });
+        return true;
+      }
       if (configMatch && (req.method === 'GET' || req.method === 'PUT')) {
-        const agent = configMatch[1];
-        if (!getExecutors().some((e) => e.id === agent)) {
+        const agent = configMatch[1] as string;
+        if (!isKnownExecutor(agent)) {
           json(res, 404, { error: 'unknown executor' });
           return true;
         }
@@ -299,15 +287,7 @@ export function createBoardHandler(deps: BoardDeps) {
           ],
           tunnel,
           tunnelConfig,
-          executors: (await Promise.all(
-            getExecutors().map(async (e) => {
-              let state: ExecutorState;
-              if (e.id === 'workbuddy') state = 'pending';
-              else if (e.id === 'gemini') state = 'not-connected';
-              else state = (await whichBin(e.bin)) ? 'connected' : 'missing';
-              return { id: e.id, label: e.label, state };
-            }),
-          )),
+          executors: (await listExecutors(store)).map(({ id, label, state }) => ({ id, label, state })),
         });
         return true;
       }

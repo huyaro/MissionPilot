@@ -768,6 +768,12 @@ export class Store {
     return next;
   }
 
+  /** Remove an executor's saved config row (Settings "remove"). */
+  deleteExecutorConfig(agent: string): boolean {
+    const info = this.db.prepare('DELETE FROM executor_config WHERE agent = ?').run(agent);
+    return info.changes > 0;
+  }
+
   getExecutorConfig(agent: string): ExecutorConfig | null {
     const row = this.db
       .prepare('SELECT * FROM executor_config WHERE agent = ?')

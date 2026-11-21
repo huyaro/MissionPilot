@@ -18,10 +18,42 @@ export function Connections(props: { api: BoardApi; onChanged?: () => void }) {
   const [stopping, setStopping] = useState(false);
   // Tunnel start/stop failure, shown inline next to the button.
   const [tunnelError, setTunnelError] = useState<string | null>(null);
-  // Local edits per executor: models as comma-separated text, default model, reasoning.
+  // Local edits per executor: chosen default model + reasoning level.
+  // The model list itself is never typed — it comes from the agent.
   const [edits, setEdits] = useState<
-    Record<string, { modelsText: string; defaultModel: string; reasoning: string }>
+    Record<string, { defaultModel: string; reasoning: string }>
   >({});
+  // Model list per executor, fetched from the agent's own mechanism.
+  type ModelsState =
+    | { status: 'loading' }
+    | { status: 'ready'; models: string[]; source: string }
+    | { status: 'error'; error: string };
+  const [modelsState, setModelsState] = useState<Record<string, ModelsState>>({});
+  const [showAdd, setShowAdd] = useState(false);
+  const [addError, setAddError] = useState<string | null>(null);
+  const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  const fetchModels = (id: string, force = false) => {
+    setModelsState((prev) => {
+      if (!force && prev[id]) return prev;
+      return { ...prev, [id]: { status: 'loading' } };
+    });
+    api
+      .executorModels(id)
+      .then((r) =>
+        setModelsState((prev) => ({
+          ...prev,
+          [id]: { status: 'ready', models: r.models, source: r.source },
+        })),
+      )
+      .catch((e: unknown) =>
+        setModelsState((prev) => ({
+          ...prev,
+          [id]: { status: 'error', error: e instanceof Error ? e.message : String(e) },
+        })),
+      );
+  };
 
   const load = () => {
     api
@@ -37,15 +69,17 @@ export function Connections(props: { api: BoardApi; onChanged?: () => void }) {
       .executors()
       .then((r) => {
         setExecutors(r.executors);
-        const next: Record<string, { modelsText: string; defaultModel: string; reasoning: string }> = {};
+        const next: Record<string, { defaultModel: string; reasoning: string }> = {};
         for (const e of r.executors) {
           next[e.id] = {
-            modelsText: (e.config?.models ?? []).join(', '),
             defaultModel: e.config?.defaultModel ?? '',
             reasoning: e.config?.reasoning ?? '',
           };
         }
         setEdits(next);
+        for (const e of r.executors) {
+          if (e.added) fetchModels(e.id);
+        }
       })
       .catch(() => undefined);
   };
@@ -55,22 +89,72 @@ export function Connections(props: { api: BoardApi; onChanged?: () => void }) {
   const save = async (id: string) => {
     const edit = edits[id];
     if (!edit) return;
-    const models = edit.modelsText
-      .split(',')
-      .map((m) => m.trim())
-      .filter((m) => m.length > 0);
+    const ms = modelsState[id];
+    const executor = executors.find((e) => e.id === id);
+    // Save the fetched catalogue as `models`; when the fetch failed, keep
+    // the previously saved list so the saved default still validates.
+    const models = ms?.status === 'ready' ? ms.models : (executor?.config?.models ?? []);
+    // A default that is no longer on the fetched list falls back to the
+    // CLI default instead of failing the save (the UI says so, see below).
+    const chosen =
+      ms?.status === 'ready' && edit.defaultModel.trim() !== '' && !ms.models.includes(edit.defaultModel.trim())
+        ? ''
+        : edit.defaultModel.trim();
     setError(null);
     setSaved(null);
+    setBusyId(id);
     try {
       await api.saveExecutorConfig(id, {
         models,
-        defaultModel: edit.defaultModel.trim() || null,
+        defaultModel: chosen || null,
         reasoning: (edit.reasoning || null) as 'low' | 'medium' | 'high' | null,
       });
       setSaved(`${id} 配置已保存`);
       load();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const addExecutor = async (id: string) => {
+    setAddError(null);
+    setBusyId(id);
+    try {
+      // Adding = creating the saved config row (empty); the model list
+      // is fetched right after, via load().
+      await api.saveExecutorConfig(id, {});
+      setSaved(`${id} 已添加`);
+      load();
+    } catch (e) {
+      setAddError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const removeExecutor = async (id: string) => {
+    // Two-step confirm: first click arms, second click removes.
+    if (confirmRemove !== id) {
+      setConfirmRemove(id);
+      return;
+    }
+    setConfirmRemove(null);
+    setBusyId(id);
+    try {
+      await api.removeExecutorConfig(id);
+      setSaved(`${id} 已移除，可随时重新添加`);
+      setModelsState((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+      load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusyId(null);
     }
   };
 
@@ -131,6 +215,11 @@ export function Connections(props: { api: BoardApi; onChanged?: () => void }) {
   const canStartTunnel =
     (tunnelId.trim() !== '' || (data?.tunnelConfig?.tunnelId ?? '') !== '') &&
     (apiKey.trim() !== '' || (data?.tunnelConfig?.apiKeySet ?? false));
+  // Added = has a saved config row; candidates = CLI agents not yet added.
+  const addedExecutors = executors.filter((e) => e.added);
+  const addCandidates = executors.filter(
+    (e) => (e.id === 'codebuddy' || e.id === 'qoder') && !e.added,
+  );
 
   return (
     <div>
@@ -170,94 +259,165 @@ export function Connections(props: { api: BoardApi; onChanged?: () => void }) {
         )}
       </div>
       <div className="card">
-        <h2>执行者</h2>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <h2>执行者</h2>
+          <button className="btn secondary" onClick={() => setShowAdd((v) => !v)}>
+            {showAdd ? '收起' : '添加'}
+          </button>
+        </div>
         <p className="sub">
-          模型与推理等级按执行者记录。CLI 适配器暂不传递模型参数——具体参数需等 Mac 预检确认。
+          模型从各执行者本机取回（Qoder：qoder --list-models；CodeBuddy：~/.codebuddy/models.json），下拉选择后保存到本地配置。CLI
+          适配器暂不向派发传递模型参数，待 Mac 预检确认。
         </p>
-        <table>
-          <thead>
-            <tr>
-              <th>执行者</th>
-              <th>状态</th>
-              <th>模型（逗号分隔）</th>
-              <th>默认模型</th>
-              <th>推理等级</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {executors
-              .filter((e) => e.id === 'codebuddy' || e.id === 'qoder')
-              .map((e) => {
-              const edit = edits[e.id] ?? { modelsText: '', defaultModel: '', reasoning: '' };
-              const editable = e.id === 'codebuddy' || e.id === 'qoder';
-              return (
-                <tr key={e.id}>
-                  <td>
-                    <strong>{e.label}</strong>
-                  </td>
-                  <td>
-                    <span className={`pill ${e.state}`}>{statusLabel(e.state)}</span>
-                  </td>
-                  <td>
-                    <input
-                      value={edit.modelsText}
-                      disabled={!editable}
-                      placeholder={editable ? 'model-a, model-b' : '—'}
-                      onChange={(ev) =>
-                        setEdits((prev) => ({
-                          ...prev,
-                          [e.id]: { ...edit, modelsText: ev.target.value },
-                        }))
-                      }
-                      style={{ width: 220 }}
-                    />
-                  </td>
-                  <td>
-                    <input
-                      value={edit.defaultModel}
-                      disabled={!editable}
-                      placeholder="默认模型"
-                      onChange={(ev) =>
-                        setEdits((prev) => ({
-                          ...prev,
-                          [e.id]: { ...edit, defaultModel: ev.target.value },
-                        }))
-                      }
-                      style={{ width: 140 }}
-                    />
-                  </td>
-                  <td>
-                    <select
-                      value={edit.reasoning}
-                      disabled={!editable}
-                      onChange={(ev) =>
-                        setEdits((prev) => ({
-                          ...prev,
-                          [e.id]: { ...edit, reasoning: ev.target.value },
-                        }))
-                      }
-                    >
-                      <option value="">—</option>
-                      {REASONING_LEVELS.map((l) => (
-                        <option key={l} value={l}>
-                          {l}
-                        </option>
-                      ))}
-                    </select>
-                  </td>
-                  <td>
-                    {editable && (
-                      <button className="btn secondary" onClick={() => void save(e.id)}>
-                        保存
+        {showAdd && (
+          <div>
+            {addCandidates.length === 0 ? (
+              <p className="sub">本地检测到的执行者都已添加。</p>
+            ) : (
+              <table>
+                <tbody>
+                  {addCandidates.map((e) => (
+                    <tr key={e.id}>
+                      <td>
+                        <strong>{e.label}</strong>
+                      </td>
+                      <td>
+                        <span className={`pill ${e.state}`}>{statusLabel(e.state)}</span>
+                      </td>
+                      <td className="sub">
+                        {e.detected ? '已检测到' : `未检测到（PATH 中没有 ${e.id}）`}
+                      </td>
+                      <td>
+                        <button
+                          className="btn secondary"
+                          disabled={!e.detected || busyId === e.id}
+                          onClick={() => void addExecutor(e.id)}
+                        >
+                          {busyId === e.id ? '添加中…' : '添加'}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            {addError && <p className="error">{addError}</p>}
+          </div>
+        )}
+        {addedExecutors.length === 0 ? (
+          <p className="sub">尚未添加执行者。点「添加」从本地检测到的 agent 里挑一个。</p>
+        ) : (
+          <table>
+            <thead>
+              <tr>
+                <th>执行者</th>
+                <th>状态</th>
+                <th>模型</th>
+                <th>推理等级</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {addedExecutors.map((e) => {
+                const edit = edits[e.id] ?? { defaultModel: '', reasoning: '' };
+                const ms = modelsState[e.id];
+                const staleDefault =
+                  edit.defaultModel !== '' &&
+                  ms?.status === 'ready' &&
+                  !ms.models.includes(edit.defaultModel);
+                return (
+                  <tr key={e.id}>
+                    <td>
+                      <strong>{e.label}</strong>
+                    </td>
+                    <td>
+                      <span className={`pill ${e.state}`}>{statusLabel(e.state)}</span>
+                    </td>
+                    <td>
+                      {ms === undefined || ms.status === 'loading' ? (
+                        <span className="sub">加载模型中…</span>
+                      ) : ms.status === 'error' ? (
+                        <span>
+                          <span className="error">模型列表获取失败</span>{' '}
+                          <button className="btn secondary" onClick={() => fetchModels(e.id, true)}>
+                            重试
+                          </button>
+                          <br />
+                          <span className="sub">{ms.error}</span>
+                        </span>
+                      ) : (
+                        <span>
+                          <select
+                            value={ms.models.includes(edit.defaultModel) ? edit.defaultModel : ''}
+                            onChange={(ev) =>
+                              setEdits((prev) => ({
+                                ...prev,
+                                [e.id]: { ...edit, defaultModel: ev.target.value },
+                              }))
+                            }
+                            style={{ width: 220 }}
+                          >
+                            <option value="">使用 CLI 默认模型</option>
+                            {ms.models.map((m) => (
+                              <option key={m} value={m}>
+                                {m}
+                              </option>
+                            ))}
+                          </select>
+                          <br />
+                          <span className="sub">来源：{ms.source}</span>
+                          {staleDefault && (
+                            <>
+                              <br />
+                              <span className="error">
+                                之前选的 {edit.defaultModel}{' '}
+                                已不在当前列表中，保存时会改用 CLI 默认模型
+                              </span>
+                            </>
+                          )}
+                        </span>
+                      )}
+                    </td>
+                    <td>
+                      <select
+                        value={edit.reasoning}
+                        onChange={(ev) =>
+                          setEdits((prev) => ({
+                            ...prev,
+                            [e.id]: { ...edit, reasoning: ev.target.value },
+                          }))
+                        }
+                      >
+                        <option value="">—</option>
+                        {REASONING_LEVELS.map((l) => (
+                          <option key={l} value={l}>
+                            {l}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
+                    <td>
+                      <button
+                        className="btn secondary"
+                        disabled={busyId === e.id}
+                        onClick={() => void save(e.id)}
+                      >
+                        {busyId === e.id ? '保存中…' : '保存'}
+                      </button>{' '}
+                      <button
+                        className="btn secondary"
+                        disabled={busyId === e.id}
+                        onClick={() => void removeExecutor(e.id)}
+                      >
+                        {confirmRemove === e.id ? '确认移除？' : '移除'}
                       </button>
-                    )}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
       </div>
       <div className="card">
         <h2>隧道</h2>

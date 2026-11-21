@@ -188,6 +188,12 @@
    `which codex codebuddy qoder qodercn`；各 CLI 一次无副作用 headless 调用
    （如 `codebuddy -p "用一句话总结 README.md" --output-format stream-json -y`），
    确认登录态与 stream-json 输出正常。adapter 的真实事件形状以此为准，必要时再调 parser。
+   模型列表机制（设置页执行者卡片，VM 上只用 fake 脚本/临时 models.json 验过）：
+   Qoder 走官方 `qoder --list-models`，输出格式未在真机上见过，解析器是按文档描述
+   做的容错解析，真机输出若含表格/多余列可能需要再调；CodeBuddy 没有非交互式列
+   模型命令，取的是 `~/.codebuddy/models.json`（availableModels 优先，否则
+   models[].id），该文件不存在时设置页会明确提示取不到、模型只能用 CLI 默认——
+   Mac 上需确认该文件是否存在、内容是否就是用户想要的模型范围。
 2. **Codex 经 stdio 调通**：需在 Mac 上 `codex mcp add local-agents -- node <server.js>` 后实测。
 3. **ChatGPT 档位**：决定 P2b 是否值得做；P0/P1 不卡。
 4. **Tauri Mac 实机**：本机只做 Linux 构建验证；Mac 打包与运行由用户侧验证。

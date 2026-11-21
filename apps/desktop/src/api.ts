@@ -105,6 +105,10 @@ export interface ExecutorInfo {
   id: string;
   label: string;
   state: 'connected' | 'pending' | 'not-connected' | 'missing';
+  /** Binary found on PATH (CLI executors). */
+  detected: boolean;
+  /** A config row exists in executor_config (i.e. the user added it). */
+  added: boolean;
   config: {
     agent: string;
     models: string[];
@@ -234,6 +238,16 @@ export class BoardApi {
       method: 'PUT',
       body: JSON.stringify(config),
     });
+  }
+
+  /** Fetch the model list for one executor, from that agent's own mechanism. */
+  executorModels(agent: string): Promise<{ models: string[]; source: string }> {
+    return this.req(`/api/executors/${agent}/models`);
+  }
+
+  /** Remove an executor's saved config (Settings "remove"). */
+  async removeExecutorConfig(agent: string): Promise<{ removed: boolean; config: null }> {
+    return this.req(`/api/executors/${agent}/config`, { method: 'DELETE' });
   }
 
   /** SSE stream; onEvent fires for every board event. Returns a close fn. */
