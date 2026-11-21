@@ -31,7 +31,8 @@ export function Connections(props: { api: BoardApi; onChanged?: () => void }) {
   // agent's own list mechanism.
   const [edits, setEdits] = useState<Record<string, { models: ConfigModel[]; defaultModel: string | null }>>({});
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [pickerOpen, setPickerOpen] = useState(false);
+  // Model chosen in the bottom dropdown ('' = none chosen yet).
+  const [dropdownModel, setDropdownModel] = useState('');
   // Model list per executor, fetched from the agent's own mechanism.
   type ModelsState =
     | { status: 'loading' }
@@ -123,7 +124,7 @@ export function Connections(props: { api: BoardApi; onChanged?: () => void }) {
 
   const selectExecutor = (id: string) => {
     setSelectedId(id);
-    setPickerOpen(false);
+    setDropdownModel('');
     setConfirmRemove(null);
     fetchModels(id);
   };
@@ -271,7 +272,7 @@ export function Connections(props: { api: BoardApi; onChanged?: () => void }) {
   const selected = executors.find((e) => e.id === selectedId) ?? null;
   const selectedEdit = selected ? (edits[selected.id] ?? { models: [], defaultModel: null }) : null;
   const selectedModels = selected ? modelsState[selected.id] : undefined;
-  // Fetched models not yet added — the pool the 选择模型 picker draws from.
+  // Fetched models not yet added — the pool the bottom dropdown draws from.
   const unaddedModels =
     selectedModels?.status === 'ready' && selectedEdit
       ? selectedModels.models.filter((m) => !selectedEdit.models.some((cm) => cm.id === m))
@@ -470,51 +471,12 @@ export function Connections(props: { api: BoardApi; onChanged?: () => void }) {
                       </div>
                     ) : (
                       <>
-                        <div
-                          style={{
-                            display: 'flex',
-                            justifyContent: 'space-between',
-                            alignItems: 'center',
-                          }}
-                        >
-                          <h3 style={{ margin: '18px 0 8px' }}>模型与派发范围</h3>
-                          <button
-                            className="btn secondary"
-                            onClick={() => setPickerOpen((v) => !v)}
-                          >
-                            {pickerOpen ? '收起' : '选择模型'}
-                          </button>
-                        </div>
+                        <h3 style={{ margin: '18px 0 8px' }}>模型与派发范围</h3>
                         <p className="sub" style={{ marginTop: 0 }}>
                           来源：{selectedModels.source}
                         </p>
-                        {pickerOpen && (
-                          <div style={{ marginBottom: 12 }}>
-                            {unaddedModels.length === 0 ? (
-                              <p className="sub">该 agent 的模型已全部添加。</p>
-                            ) : (
-                              <table>
-                                <tbody>
-                                  {unaddedModels.map((m) => (
-                                    <tr key={m}>
-                                      <td>{m}</td>
-                                      <td style={{ textAlign: 'right' }}>
-                                        <button
-                                          className="btn secondary"
-                                          onClick={() => addModel(selected.id, m)}
-                                        >
-                                          添加
-                                        </button>
-                                      </td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
-                            )}
-                          </div>
-                        )}
                         {selectedEdit.models.length === 0 ? (
-                          <p className="sub">尚未添加模型，点右上角「选择模型」添加。</p>
+                          <p className="sub">尚未添加模型，从下方下拉框选择添加。</p>
                         ) : (
                           <table>
                             <thead>
@@ -591,6 +553,40 @@ export function Connections(props: { api: BoardApi; onChanged?: () => void }) {
                         <p className="sub" style={{ marginTop: 16 }}>
                           {scopeLine(selectedEdit)}
                         </p>
+                        <div style={{ display: 'flex', gap: 8, margin: '12px 0' }}>
+                          <select
+                            value={dropdownModel}
+                            disabled={unaddedModels.length === 0}
+                            onChange={(ev) => setDropdownModel(ev.target.value)}
+                            style={{ flex: 1, minWidth: 0 }}
+                          >
+                            {unaddedModels.length === 0 ? (
+                              <option value="">该 agent 的模型已全部添加。</option>
+                            ) : (
+                              <>
+                                <option value="">选择要添加的模型…</option>
+                                {unaddedModels.map((m) => (
+                                  <option key={m} value={m}>
+                                    {m}
+                                  </option>
+                                ))}
+                              </>
+                            )}
+                          </select>
+                          <button
+                            className="btn secondary"
+                            disabled={
+                              dropdownModel === '' || !unaddedModels.includes(dropdownModel)
+                            }
+                            onClick={() => {
+                              if (dropdownModel === '') return;
+                              addModel(selected.id, dropdownModel);
+                              setDropdownModel('');
+                            }}
+                          >
+                            添加
+                          </button>
+                        </div>
                         <button
                           className="btn"
                           style={{ width: '100%' }}
