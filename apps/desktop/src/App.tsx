@@ -294,14 +294,14 @@ export default function App() {
         ))}
         {sidebarCollapsed ? (
           <div className="sidebar-dots">
-            <span className="status-dot ok" title={`后端：${statusLabel('running')}`} />
+            <span className="status-dot ok" title={`监听服务：${statusLabel('running')}`} />
             <span className={`status-dot ${tunnelState ?? 'disabled'}`} title={`隧道：${tunnelState ? statusLabel(tunnelState) : '—'}`} />
             {pendingCount > 0 && <span className="status-dot pending" title={`待审批：${pendingCount}`} />}
           </div>
         ) : (
           <div className="sidebar-section">
             <div className="conn-row">
-              <span>后端</span>
+              <span>监听服务</span>
               <span className="pill connected">{statusLabel('running')}</span>
             </div>
             <div className="conn-row">
