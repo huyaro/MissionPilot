@@ -487,22 +487,7 @@ export function Connections(props: { api: BoardApi; onChanged?: () => void }) {
 
                 {selected.detected && (
                   <>
-                    {selectedModels === undefined || selectedModels.status === 'loading' ? (
-                      <p className="sub">加载模型中…</p>
-                    ) : selectedModels.status === 'error' ? (
-                      <div>
-                        <p className="error">模型列表获取失败</p>
-                        <p className="sub">{selectedModels.error}</p>
-                        <button
-                          className="btn secondary"
-                          onClick={() => fetchModels(selected.id, true)}
-                        >
-                          重试
-                        </button>
-                      </div>
-                    ) : (
-                      <>
-                        <h3 style={{ margin: '18px 0 8px' }}>模型与派发范围</h3>
+                    <h3 style={{ margin: '18px 0 8px' }}>模型与派发范围</h3>
                         {selectedEdit.models.length === 0 ? (
                           <p className="sub">尚未添加模型，从下方下拉框选择添加。</p>
                         ) : (
@@ -579,25 +564,38 @@ export function Connections(props: { api: BoardApi; onChanged?: () => void }) {
                           </table>
                         )}
                         <div style={{ display: 'flex', gap: 8, margin: '12px 0' }}>
-                          <select
-                            value={dropdownModel}
-                            disabled={unaddedModels.length === 0}
-                            onChange={(ev) => setDropdownModel(ev.target.value)}
-                            style={{ flex: 1, minWidth: 0 }}
-                          >
-                            {unaddedModels.length === 0 ? (
-                              <option value="">该 agent 的模型已全部添加。</option>
-                            ) : (
-                              <>
-                                <option value="">选择要添加的模型…</option>
-                                {unaddedModels.map((m) => (
-                                  <option key={m} value={m}>
-                                    {m}
-                                  </option>
-                                ))}
-                              </>
-                            )}
-                          </select>
+                          {/* Only this dropdown waits on the fetched model
+                              list — the saved config above renders at once. */}
+                          {selectedModels === undefined ||
+                          selectedModels.status === 'loading' ? (
+                            <select value="" disabled style={{ flex: 1, minWidth: 0 }}>
+                              <option value="">模型列表加载中…</option>
+                            </select>
+                          ) : selectedModels.status === 'error' ? (
+                            <select value="" disabled style={{ flex: 1, minWidth: 0 }}>
+                              <option value="">模型列表获取失败</option>
+                            </select>
+                          ) : (
+                            <select
+                              value={dropdownModel}
+                              disabled={unaddedModels.length === 0}
+                              onChange={(ev) => setDropdownModel(ev.target.value)}
+                              style={{ flex: 1, minWidth: 0 }}
+                            >
+                              {unaddedModels.length === 0 ? (
+                                <option value="">该 agent 的模型已全部添加。</option>
+                              ) : (
+                                <>
+                                  <option value="">选择要添加的模型…</option>
+                                  {unaddedModels.map((m) => (
+                                    <option key={m} value={m}>
+                                      {m}
+                                    </option>
+                                  ))}
+                                </>
+                              )}
+                            </select>
+                          )}
                           <button
                             className="btn secondary"
                             disabled={
@@ -612,6 +610,22 @@ export function Connections(props: { api: BoardApi; onChanged?: () => void }) {
                             添加
                           </button>
                         </div>
+                        {selectedModels?.status === 'error' && (
+                          <div style={{ margin: '0 0 12px' }}>
+                            <p className="error" style={{ margin: '0 0 4px' }}>
+                              模型列表获取失败
+                            </p>
+                            <p className="sub" style={{ margin: '0 0 8px' }}>
+                              {selectedModels.error}
+                            </p>
+                            <button
+                              className="btn secondary"
+                              onClick={() => fetchModels(selected.id, true)}
+                            >
+                              重试
+                            </button>
+                          </div>
+                        )}
                         <button
                           className="btn"
                           style={{ width: '100%' }}
@@ -620,8 +634,6 @@ export function Connections(props: { api: BoardApi; onChanged?: () => void }) {
                         >
                           {busyId === selected.id ? '保存中…' : '保存配置'}
                         </button>
-                      </>
-                    )}
                   </>
                 )}
               </>
@@ -673,7 +685,7 @@ export function Connections(props: { api: BoardApi; onChanged?: () => void }) {
               value={tunnelId}
               onChange={(ev) => setTunnelId(ev.target.value)}
               placeholder="tunnel_..."
-              style={{ width: 280 }}
+              style={{ width: 420 }}
             />
           </div>
           <div className="form-row">
@@ -685,7 +697,7 @@ export function Connections(props: { api: BoardApi; onChanged?: () => void }) {
               placeholder={
                 data?.tunnelConfig?.apiKeySet ? '已保存，留空使用已保存的密钥' : '输入 API 密钥'
               }
-              style={{ width: 280 }}
+              style={{ width: 420 }}
             />
           </div>
           <div className="btn-row">
