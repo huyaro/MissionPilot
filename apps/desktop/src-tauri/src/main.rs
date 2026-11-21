@@ -62,12 +62,18 @@ fn resolve_backend_js(app: &AppHandle, explicit: Option<String>) -> Option<PathB
 
 #[tauri::command]
 fn backend_status() -> serde_json::Value {
-    serde_json::json!({ "running": backend_listening() })
+    let running = backend_listening();
+    // TEMP DEBUG (white window): every command call is logged to the
+    // `npm run tauri dev` terminal so a blank window can be traced.
+    eprintln!("[mission-pilot] backend_status -> running={running}");
+    serde_json::json!({ "running": running })
 }
 
 #[tauri::command]
 fn get_token(state: State<'_, AppState>) -> Option<String> {
-    state.token.lock().ok().and_then(|t| t.clone())
+    let tok = state.token.lock().ok().and_then(|t| t.clone());
+    eprintln!("[mission-pilot] get_token -> {}", if tok.is_some() { "some" } else { "none" });
+    tok
 }
 
 /// Token for a backend the user started themselves (e.g. in a terminal):
@@ -75,14 +81,18 @@ fn get_token(state: State<'_, AppState>) -> Option<String> {
 /// can connect without the user pasting it.
 #[tauri::command]
 fn get_env_token() -> Option<String> {
-    std::env::var("ORCHESTRATOR_MCP_TOKEN").ok().filter(|t| !t.trim().is_empty())
+    let tok = std::env::var("ORCHESTRATOR_MCP_TOKEN").ok().filter(|t| !t.trim().is_empty());
+    eprintln!("[mission-pilot] get_env_token -> {}", if tok.is_some() { "some" } else { "none" });
+    tok
 }
 
 /// Path the app would use when the Backend JS field is left blank
 /// (explicit path → packaged → dev layout, same as resolve_backend_js).
 #[tauri::command]
 fn resolve_backend_path(app: AppHandle) -> Option<String> {
-    resolve_backend_js(&app, None).map(|p| p.to_string_lossy().to_string())
+    let p = resolve_backend_js(&app, None).map(|p| p.to_string_lossy().to_string());
+    eprintln!("[mission-pilot] resolve_backend_path -> {p:?}");
+    p
 }
 
 #[tauri::command]
@@ -91,6 +101,7 @@ fn start_backend(
     state: State<'_, AppState>,
     backend_js: Option<String>,
 ) -> Result<String, String> {
+    eprintln!("[mission-pilot] start_backend called, explicit={backend_js:?}");
     if backend_listening() {
         // Already running (e.g. started externally); hand back the known
         // token if we spawned it, else the caller must paste one.
@@ -103,6 +114,7 @@ fn start_backend(
     }
     let js = resolve_backend_js(&app, backend_js)
         .ok_or_else(|| "backend server.js not found (pass its path in the setup screen)".to_string())?;
+    eprintln!("[mission-pilot] start_backend: resolved js={}", js.display());
     let token = fresh_token();
     let child = Command::new("node")
         .arg(&js)
@@ -124,10 +136,12 @@ fn start_backend(
             if let Ok(mut t) = state.token.lock() {
                 *t = Some(token.clone());
             }
+            eprintln!("[mission-pilot] start_backend: backend listening, token stored");
             return Ok(token);
         }
         std::thread::sleep(Duration::from_millis(200));
     }
+    eprintln!("[mission-pilot] start_backend: backend did NOT start listening within 10s");
     if let Ok(mut slot) = state.backend_child.lock() {
         if let Some(mut c) = slot.take() {
             let _ = c.kill();

@@ -41,6 +41,8 @@ export default function App() {
 
   const checkBackend = useCallback(async () => {
     const status = await backendStatus();
+    // TEMP DEBUG (white window): trace the launch flow.
+    console.log('[mission-pilot] checkBackend: running=', status.running, 'hasToken=', !!token, 'isTauri=', isTauri());
     setBackendRunning(status.running);
     if (status.running && !token) {
       const appToken = await getAppToken();
@@ -62,11 +64,14 @@ export default function App() {
       autoStartTried.current = true;
       setStarting(true);
       try {
+        console.log('[mission-pilot] auto-starting backend…');
         setDefaultBackendJs(await resolveBackendPath());
         const newToken = await startBackend(undefined);
+        console.log('[mission-pilot] auto-start ok, token received');
         setToken(newToken);
         setBackendRunning(true);
       } catch (e) {
+        console.log('[mission-pilot] auto-start failed:', e instanceof Error ? e.message : String(e));
         setSetupError(e instanceof Error ? e.message : String(e));
       } finally {
         setStarting(false);
