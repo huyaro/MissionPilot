@@ -55,16 +55,23 @@ export function Connections(props: { api: BoardApi; onChanged?: () => void }) {
       );
   };
 
-  const load = () => {
+  // Connections only (tunnel state + saved config). Safe to poll: it
+  // never touches the executor edit state.
+  const loadConnections = () => {
     api
       .connections()
       .then((r) => {
         setData(r);
-        // Prefill the tunnel id from the env default / current config,
-        // but never overwrite what the user has already typed.
+        // Prefill the tunnel id from the saved config, but never
+        // overwrite what the user has already typed.
         setTunnelId((prev) => prev || r.tunnelConfig?.tunnelId || '');
       })
       .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+  };
+
+  // Executors + local edit state. NOT polled: rebuilding `edits` every
+  // tick would wipe unsaved changes.
+  const loadExecutors = () => {
     api
       .executors()
       .then((r) => {
@@ -84,7 +91,22 @@ export function Connections(props: { api: BoardApi; onChanged?: () => void }) {
       .catch(() => undefined);
   };
 
+  const load = () => {
+    loadConnections();
+    loadExecutors();
+  };
+
   useEffect(load, [api]);
+
+  // The tunnel state can change on its own — starting -> running once
+  // the health check passes, or dying / reconnecting later. The page
+  // used to show a stale snapshot until the next action (the sidebar
+  // polls, so it moved on while this table stayed on 启动中). Poll the
+  // connections every 2s, same as the sidebar.
+  useEffect(() => {
+    const timer = setInterval(loadConnections, 2_000);
+    return () => clearInterval(timer);
+  }, [api]);
 
   const save = async (id: string) => {
     const edit = edits[id];
@@ -265,10 +287,6 @@ export function Connections(props: { api: BoardApi; onChanged?: () => void }) {
             {showAdd ? '收起' : '添加'}
           </button>
         </div>
-        <p className="sub">
-          模型从各执行者本机取回（Qoder：qoder --list-models；CodeBuddy：~/.codebuddy/models.json），下拉选择后保存到本地配置。CLI
-          适配器暂不向派发传递模型参数，待 Mac 预检确认。
-        </p>
         {showAdd && (
           <div>
             {addCandidates.length === 0 ? (
