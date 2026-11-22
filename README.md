@@ -32,6 +32,7 @@ node dist/src/server.js
 ```
 
 HTTP 只绑 127.0.0.1；远程接入只走官方 tunnel，不开公网端口。
+`/mcp` 不再要求 bearer token（隧道连接不带 token，隧道本身是鉴权边界）；token 仍在启动时必填，用于保护 `/api/*` 看板接口。
 `ORCHESTRATOR_MCP_MODE=readonly` 为 P2a 只读（写工具被拒并明示原因）。
 
 ## Tunnel（P2，ChatGPT 用）
@@ -67,8 +68,8 @@ npm run tauri dev
 Setup 屏可一键启动后端（子进程管理，token 自动回传）；后端已在终端启动
 时，应用读取环境变量 `ORCHESTRATOR_MCP_TOKEN` 自动连接。
 
-看板 API：同一 127.0.0.1:8788 端口上的 `/api/*`（与 MCP 同一个 bearer
-token；SSE 用 `?token=`，见 `src/board.ts`）。七页：总览、Mission 详情、
+看板 API：同一 127.0.0.1:8788 端口上的 `/api/*`（用启动时要求的 bearer
+token 鉴权；`/mcp` 不再要求 bearer；SSE 用 `?token=`，见 `src/board.ts`）。七页：总览、Mission 详情、
 Attempt 详情、审批中心、记分板、账本、连接。
 
 ## 测试

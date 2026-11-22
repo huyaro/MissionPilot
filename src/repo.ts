@@ -1,8 +1,8 @@
 // Repo read tools (P2): read-only code access so the brain can look at a
 // repo before planning. No writes, no shell. Every path must stay inside
 // the given repo (traversal rejected). The tools take the repo as an
-// argument; they run behind the MCP server's auth (bearer token on HTTP,
-// local stdio for Codex) — there is no separate repo allowlist in P2.
+// argument; they run behind the MCP server (loopback-only on HTTP, local
+// stdio for Codex) — there is no separate repo allowlist in P2.
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { join, resolve, relative, sep } from 'node:path';
 

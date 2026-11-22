@@ -118,7 +118,7 @@
 
 | 模块 | 内容 |
 |---|---|
-| `plugin-mcp` | 增加 Streamable HTTP 传输（与 stdio 共用一套工具定义）；bearer 鉴权 |
+| `plugin-mcp` | 增加 Streamable HTTP 传输（与 stdio 共用一套工具定义）；bearer 鉴权（后改为仅保护 /api/*，/mcp 不再要求——见 §9） |
 | `tunnel` | `tunnel-client` 进程管理（spawn、健康检查、重启）；tunnel_id → 出站连接 |
 | `plugin-mcp` | 增加读仓工具 `repo_map` / `read_file` / `search_code`（供大脑规划前看代码） |
 | `plugin-mcp` | P2a 只读 / P2b dispatch 拆分：只读模式下写工具（dispatch_task 等）拒绝并明示原因 |
@@ -217,13 +217,13 @@
   有预算的 mission 要求每个任务都带 estimate。
 - 首派执行者固定为 codebuddy（P0 执行者），reroute 去另一家；记分板（P3）上线前不做动态选型。
 - HTTP 端口默认 8788（8787 已被 workbuddy2api 网关占用）；只绑 127.0.0.1；
-  Streamable HTTP 用 JSON 响应模式（enableJsonResponse）；bearer token 必填。
+  Streamable HTTP 用 JSON 响应模式（enableJsonResponse）；/mcp 不再要求 bearer token（隧道连接不带 token，隧道本身是鉴权边界；服务器只绑本机）；bearer token 仍在启动时必填、并继续保护 /api/*。
 - Tunnel 健康只认 /healthz 200，进程活着不等于已连通；API key 只走环境变量。
 - 后续任务的 worktree 以当前 integration 分支头为 base（DAG 语义：B 在 A 的合回结果上继续做）。
 - P3 记分板 Elo 模型：每项通过验证的任务是一场比赛——通过的 attempt 胜、失败的 attempt 败；起分 1200，K=32；单人任务无对手、不动 Elo。成本只取已记录的 cost 事件 usage（无则 null，绝不编造）。
 - P3 账本：ledger 表 append-only，SHA-256 链（seq|ts|type|ref|mission|detail + 前一 hash），verifyLedger 重算全链。
 - P3 审批：replan 与 push 两类；拒绝必须填理由；push 只有人批后才执行，且仅当仓库有 origin remote 时才真正 push（无 remote 时诚实报告 deferred）。审批决定进账本。
-- P3 board API：同一 127.0.0.1 端口上的 /api/*（与 MCP 同一个 bearer token）；SSE（EventSource 发不了 Authorization 头）另接受 `?token=`（仅本机，服务器不记请求 URL）。
+- P3 board API：同一 127.0.0.1 端口上的 /api/*（仍用启动时要求的 bearer token 鉴权；/mcp 不再要求 bearer）；SSE（EventSource 发不了 Authorization 头）另接受 `?token=`（仅本机，服务器不记请求 URL）。
 - P3 桌面：Tauri 2.x + React 19 + Vite；后端由 Tauri 以子进程管理（start_backend，token 经 get_token 回传）；node 取自 PATH（打包进 .app 是后续步骤）。VM 上装 -dev 包被镜像的 libzstd1（+hatch1）挡住——未降级系统库，改用 /tmp 提取 sysroot（见 apps/desktop/README.md）。
 - P3 board API 需 CORS：前端跑在 Tauri webview（打包后 tauri:// origin，dev 时 localhost:1420），调 127.0.0.1:8788 属跨域——/api/* 回 `Access-Control-Allow-Origin: *` + 预检 OPTIONS 204；服务器只绑本机且每次调用仍需 bearer token，CORS 不绕过鉴权。
 - P3 Overview 的 Live activity：bus 是内存内事件、不重放，应用启动时先用 ledger 最近 12 条做种子、再由 SSE 追加；否则重启后面板一直空着。

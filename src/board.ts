@@ -1,6 +1,7 @@
 // Board API (P3): the local REST + SSE API the Tauri desktop board reads.
-// Same bearer token as the MCP endpoint (checked by HttpMcpServer before
-// this handler runs). All routes are /api/* on the same 127.0.0.1 port.
+// Bearer token (ORCHESTRATOR_MCP_TOKEN), checked by HttpMcpServer before
+// this handler runs; /mcp no longer shares this check. All routes are
+// /api/* on the same 127.0.0.1 port.
 // This is NOT a browser-served page — the frontend lives in the Tauri app
 // and calls these endpoints; nothing here serves HTML.
 import type { IncomingMessage, ServerResponse } from 'node:http';

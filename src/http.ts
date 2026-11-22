@@ -2,8 +2,13 @@
 // served over HTTP on 127.0.0.1 so the official tunnel-client can forward
 // ChatGPT to it. Binds localhost only — remote access comes only through
 // the tunnel, never a public port.
-// Auth: bearer token (ORCHESTRATOR_MCP_TOKEN), required; missing or wrong
-// token -> 401. Bodies are capped at 10 MiB (the tunnel's per-request cap).
+// Auth: the bearer token (ORCHESTRATOR_MCP_TOKEN) is still required at
+// startup and guards /api/* (the board API). It is NOT checked on /mcp:
+// ChatGPT tunnel connections carry no bearer token ("No authentication" —
+// the tunnel itself is the auth boundary), and tunnel-client forwards
+// nothing to present, so requiring it here only ever 401'd the tunnel.
+// The server binds loopback-only, and the stdio transport never had auth
+// either. Bodies are capped at 10 MiB (the tunnel's per-request cap).
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -18,7 +23,7 @@ const MAX_BODY_BYTES = 10 * 1024 * 1024;
 export interface HttpMcpServerOptions {
   port: number;
   host?: string;
-  /** Bearer token; the server refuses to start without one. */
+  /** Bearer token; the server refuses to start without one. It guards /api/* (the board API); /mcp does not check it. */
   token: string;
   /** P2a read-only mode. */
   readOnly?: boolean;
@@ -157,11 +162,8 @@ export class HttpMcpServer {
       res.end(JSON.stringify({ error: 'not found' }));
       return;
     }
-    if (!this.checkAuth(req)) {
-      res.writeHead(401, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'unauthorized' }));
-      return;
-    }
+    // No auth check on /mcp: see the header comment. The tunnel is the
+    // auth boundary for remote access; the server is loopback-only.
 
     if (req.method === 'POST') {
       const body = await this.readBody(req);

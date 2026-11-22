@@ -195,18 +195,53 @@ describe('HTTP MCP transport', () => {
     }
   });
 
-  it('rejects missing/wrong bearer token with 401', async () => {
+  it('mcp works without a bearer token (tunnel path)', async () => {
+    // ChatGPT tunnel connections carry no bearer token ("No authentication":
+    // the tunnel is the auth boundary), so /mcp must not 401 without one.
     const { server, base } = await startServer(false);
     try {
-      const noToken = await rpc(base, null, 'initialize', {}, null);
-      assert.equal(noToken.status, 401);
-      const wrong = await rpc(base, null, 'initialize', {}, 'wrong-token');
-      assert.equal(wrong.status, 401);
+      const noToken = await rpc(base, null, 'initialize', {
+        protocolVersion: '2024-11-05',
+        capabilities: {},
+        clientInfo: { name: 'http-test', version: '0.1.0' },
+      }, null);
+      assert.equal(noToken.status, 200, JSON.stringify(noToken.body));
+      assert.ok(noToken.sessionId, 'initialize must return an mcp-session-id');
+      const list = await rpc(base, noToken.sessionId, 'tools/list', {}, null);
+      assert.equal(list.status, 200);
+      // A wrong token is equally ignored on /mcp (auth is not consulted
+      // there at all); the request must still be a valid initialize.
+      const wrong = await rpc(base, null, 'initialize', {
+        protocolVersion: '2024-11-05',
+        capabilities: {},
+        clientInfo: { name: 'http-test', version: '0.1.0' },
+      }, 'wrong-token');
+      assert.equal(wrong.status, 200);
       const health = await fetch(`${base}/health`);
       assert.equal(health.status, 200);
       const healthBody = (await health.json()) as { ok: boolean; mode: string };
       assert.equal(healthBody.ok, true);
       assert.equal(healthBody.mode, 'full');
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('board api still requires a bearer token', async () => {
+    const { server, base } = await startServer(false);
+    try {
+      const noToken = await fetch(`${base}/api/missions`);
+      assert.equal(noToken.status, 401);
+      const wrong = await fetch(`${base}/api/missions`, {
+        headers: { Authorization: 'Bearer wrong-token' },
+      });
+      assert.equal(wrong.status, 401);
+      // Valid token passes auth; no board handler is wired in this test
+      // server, so the request 404s instead of reaching a handler.
+      const ok = await fetch(`${base}/api/missions`, {
+        headers: { Authorization: `Bearer ${TOKEN}` },
+      });
+      assert.equal(ok.status, 404);
     } finally {
       await server.close();
     }

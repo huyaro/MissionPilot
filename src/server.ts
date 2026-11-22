@@ -1,7 +1,9 @@
 // MCP server entry.
 // - stdio (default): Codex local use.
 // - HTTP (--http or ORCHESTRATOR_TRANSPORT=http): Streamable HTTP on
-//   127.0.0.1 for ChatGPT via tunnel-client; bearer auth required.
+//   127.0.0.1 for ChatGPT via tunnel-client; no bearer check on /mcp (the
+//   tunnel is the auth boundary) — the bearer token is still required at
+//   startup and guards /api/*.
 //   The tunnel is configured only from the Settings UI (tunnel ID +
 //   API key held in backend memory); no env-var config for it.
 // Stdout is the MCP channel in stdio mode — all logging goes to stderr (see log.ts).
