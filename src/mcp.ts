@@ -123,7 +123,7 @@ export function createMcpServer(
       {
         name: 'dispatch_task',
         description:
-          'Dispatch a task to a local agent CLI (codebuddy). Async: returns an attempt_id immediately; poll get_attempt for the result.',
+          'Dispatch a task to a local agent CLI (codebuddy or qoder). Async: returns an attempt_id immediately; poll get_attempt for the result.',
         inputSchema: asJsonSchema(DISPATCH_TASK_SCHEMA),
       },
       {

@@ -148,6 +148,53 @@ describe('HTTP MCP transport', () => {
     }
   });
 
+  it('dispatch_task accepts qoder: validate, dispatch through the qoder adapter, poll to done', async () => {
+    const { server, base } = await startServer(false);
+    const repo = await makeTempGitRepo();
+    try {
+      const sessionId = await initSession(base);
+      const dispatch = await callTool(base, sessionId, 'dispatch_task', {
+        agent: 'qoder',
+        task: { title: 'Create hello', prompt: 'create hello.ts' },
+        contract: 'hello.ts exists',
+        workdir: repo,
+      });
+      assert.equal(dispatch.isError, false, dispatch.text);
+      const { attempt_id } = JSON.parse(dispatch.text) as { attempt_id: string };
+      let status = '';
+      const deadline = Date.now() + 15_000;
+      while (Date.now() < deadline) {
+        const got = await callTool(base, sessionId, 'get_attempt', { attempt_id });
+        const body = JSON.parse(got.text) as { status: string; agent: string };
+        status = body.status;
+        assert.equal(body.agent, 'qoder');
+        if (status === 'done' || status === 'failed') break;
+        await new Promise((r) => setTimeout(r, 200));
+      }
+      assert.equal(status, 'done');
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('dispatch_task still rejects an unknown agent, listing both known agents', async () => {
+    const { server, base } = await startServer(false);
+    const repo = await makeTempGitRepo();
+    try {
+      const sessionId = await initSession(base);
+      const bad = await callTool(base, sessionId, 'dispatch_task', {
+        agent: 'gemini',
+        task: { title: 't', prompt: 'p' },
+        contract: 'c',
+        workdir: repo,
+      });
+      assert.equal(bad.isError, true);
+      assert.match(bad.text, /unknown agent 'gemini' \(known: codebuddy, qoder\)/);
+    } finally {
+      await server.close();
+    }
+  });
+
   it('rejects missing/wrong bearer token with 401', async () => {
     const { server, base } = await startServer(false);
     try {

@@ -10,7 +10,7 @@ export interface ToolResult {
   isError: boolean;
 }
 
-export const KNOWN_AGENTS = ['codebuddy'] as const;
+export const KNOWN_AGENTS = ['codebuddy', 'qoder'] as const;
 
 export const DISPATCH_TASK_SCHEMA = {
   type: 'object',
