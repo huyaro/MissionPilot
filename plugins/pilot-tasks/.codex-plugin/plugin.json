@@ -1,0 +1,1 @@
+{"description":"Delegate coding work from Codex to local agent CLIs (CodeBuddy, Qoder) through the MissionPilot orchestrator: dispatch tasks, track attempts, and run multi-task missions.","license":"MIT","mcpServers":"./.mcp.json","name":"pilot-tasks","repository":"https://github.com/huyaro/MissionPilot","skills":"./skills/","version":"0.1.0"}
